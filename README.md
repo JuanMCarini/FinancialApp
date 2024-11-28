@@ -40,7 +40,7 @@ FinancialApp/
 ### Clone the repository:
 
 ```bash
-git clone https://github.com/user/FinancialApp.git
+git clone https://github.com/JuanMCarini/FinancialApp.git
 ```
 
 ### Navigate to the project directory:
@@ -51,9 +51,9 @@ cd FinancialApp
 ### Set Up the Virtual Environment and Install Dependencies
 ```bash
 python -m venv fa_env
-source fa_env/bin/activate
+source fa_env/Script/activate
 python.exe -m pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r docs/requirements.txt
 ```
 
 ## Usage
