@@ -2,11 +2,12 @@ import os
 import pandas as pd
 
 # Change working directory to the project root
-os.chdir(r"c:\Users\juanm_8qa8lav\Documents\Proyectos_Personales\FinancialApp")
+os.chdir(r"../")
 
 # Import your module
 from app.modules.database.connection import engine
 from app.modules.database.companies import add_company, add_bussines_plan
+from app.modules.database.customers import add_customer
 
 prov = pd.DataFrame(columns=["ID", "Name"])
 prov.set_index("ID", inplace=True)
@@ -30,3 +31,35 @@ add_bussines_plan(3,
                   float(input('Comisión por cobranza (plazo 36):')),
                   float(input('Comisión por cobranza (plazo 48):'))
                 )
+
+setts = pd.read_sql('settings', engine, index_col='ID')
+
+setts.loc[0, ['Detail', 'Type', 'Value']] = {'Detail': 'Día de Vto. Predeterminado', 'Type': 'I', 'Value': "28"}
+setts.loc[1, ['Detail', 'Type', 'Value']] = {'Detail': 'Periodos de Gracia', 'Type': 'I', 'Value': "2"}
+setts.to_sql('settings', engine, if_exists='append', index = False)
+
+add_customer(
+    20363297588,
+    36329758,
+    'Carini',
+    'Juan Martín',
+    'male',
+    '1992/04/01',
+    32,
+    1,
+    'Bahía Blanca',
+    "D'Orbigny",
+    312,
+    8000,
+    '0291',
+    '+54929143811',
+    2,
+    900000,
+    None,
+    'Fideisa',
+    'Fideisa',
+    'Fideisa',
+    30709706736,
+    1,
+    'Bahía Blanca',
+    'Alem 250')

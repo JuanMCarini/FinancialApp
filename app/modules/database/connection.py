@@ -1,8 +1,4 @@
 import json
-import os
-
-# Change working directory to the project root
-os.chdir(r"c:\Users\juanm_8qa8lav\Documents\Proyectos_Personales\FinancialApp")
 
 # Loading settings
 with open("docs/settings.json", "r") as file:

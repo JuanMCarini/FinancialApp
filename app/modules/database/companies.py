@@ -1,8 +1,3 @@
-import sys
-import os
-# Add the path of the parent directory to sys.path
-sys.path.append(os.path.abspath('..'))
-
 import pandas as pd
 from app.modules.database.connection import engine
 
