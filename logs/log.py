@@ -8,6 +8,7 @@ os.chdir(r"../")
 from app.modules.database.connection import engine
 from app.modules.database.companies import add_company, add_bussines_plan
 from app.modules.database.customers import add_customer
+from app.modules.database.credit_manager import new_credit
 
 prov = pd.DataFrame(columns=["ID", "Name"])
 prov.set_index("ID", inplace=True)
@@ -36,6 +37,7 @@ setts = pd.read_sql('settings', engine, index_col='ID')
 
 setts.loc[0, ['Detail', 'Type', 'Value']] = {'Detail': 'Día de Vto. Predeterminado', 'Type': 'I', 'Value': "28"}
 setts.loc[1, ['Detail', 'Type', 'Value']] = {'Detail': 'Periodos de Gracia', 'Type': 'I', 'Value': "2"}
+setts.loc[2, ['Detail', 'Type', 'Value']] = {'Detail': 'Tolerancia Cobranzas', 'Type': 'F', 'Value': '0.05'}
 setts.to_sql('settings', engine, if_exists='append', index = False)
 
 add_customer(
@@ -63,3 +65,35 @@ add_customer(
     1,
     'Bahía Blanca',
     'Alem 250')
+
+nc, inst = new_credit(
+    id_customer = 1,
+    Date_Settlement = pd.Timestamp("2024/11/28"),
+    ID_BP = 4,
+    Cap_Requested = 10**6,
+    Cap_Grant = 10**6,
+    N_Inst = 6,
+    TEM_W_IVA = 1.88/365*30,
+    V_Inst = None)
+
+nc, inst = new_credit(
+    id_customer = 1,
+    Date_Settlement = pd.Timestamp("2024/11/28"),
+    ID_BP = 4,
+    Cap_Requested = 10**6,
+    Cap_Grant = 0.5*10**6,
+    N_Inst = 12,
+    TEM_W_IVA = 1.96/365*30,
+    V_Inst = None)
+
+nc, inst = new_credit(
+    id_customer = 1,
+    Date_Settlement = pd.Timestamp("2024/10/15"),
+    ID_BP = 2,
+    Cap_Requested = 10**6,
+    Cap_Grant = 0.8*10**6,
+    N_Inst = 18,
+    TEM_W_IVA = 2.15/365*30,
+    V_Inst = None,
+    First_Inst_Purch = 5)
+
