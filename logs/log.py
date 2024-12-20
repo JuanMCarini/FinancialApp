@@ -2,7 +2,7 @@ import os
 import pandas as pd
 
 # Change working directory to the project root
-os.chdir(r"../")
+# os.chdir(r"../")
 
 # Import your module
 from app.modules.database.connection import engine
@@ -66,6 +66,34 @@ add_customer(
     'Bahía Blanca',
     'Alem 250')
 
+add_customer(
+    20456789012,       # DNI/CUIL: 20-45678901-2
+    45678901,          # ID number
+    'Pereira',         # Last name
+    'María Eugenia',   # First name
+    'female',          # Gender
+    '1990/08/15',      # Date of birth
+    34,                # Age
+    1,                 # Marital status: 1 (single)
+    'Córdoba',         # City
+    'Av. Vélez Sarsfield', # Street
+    1234,              # Street number
+    5000,              # ZIP code
+    '0351',            # Area code
+    '+5493516543210',  # Phone number
+    3,                 # Number of children
+    1200000,           # Income
+    'maria.p@gmail.com', # Email (optional)
+    'Credicoop',       # Bank name
+    'Credicoop',       # Employer/Entity 1
+    'Credicoop',       # Employer/Entity 2
+    30567894567,       # Company CUIT
+    2,                 # Employment status: 2 (employed)
+    'Córdoba',         # Location
+    'Belgrano 1500'    # Employer address
+)
+
+
 nc, inst = new_credit(
     id_customer = 1,
     Date_Settlement = pd.Timestamp("2024/11/28"),
@@ -77,7 +105,7 @@ nc, inst = new_credit(
     V_Inst = None)
 
 nc, inst = new_credit(
-    id_customer = 1,
+    id_customer = 2,
     Date_Settlement = pd.Timestamp("2024/11/28"),
     ID_BP = 4,
     Cap_Requested = 10**6,
