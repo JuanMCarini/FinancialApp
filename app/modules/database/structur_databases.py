@@ -21,6 +21,7 @@ class Customer(Base):
     DNI = Column(BigInteger, nullable=False)
     Last_Name = Column(String(100), nullable=False)
     Name = Column(String(100), nullable=False)
+    Gender = Column(String(2), nullable=False, default='O')
     Date_Birth = Column(DateTime)
     Age_at_Discharge = Column(Integer)
     ID_Province = Column(Integer, ForeignKey('provinces.ID', ondelete='SET NULL', onupdate='CASCADE'))

@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+import numpy as np
 
 # Import your module
 from app.modules.database.connection import engine
@@ -75,7 +76,7 @@ class IdentifierError(Exception):
         return f"For {self.type.name}: {self.data}."
 
 
-def create_installments(id_credit: int):
+def create_installments(id_credit: int, new_cr: pd.Series, save: bool = False):
     """
     Creates and stores installment records for a given credit.
 
@@ -90,24 +91,24 @@ def create_installments(id_credit: int):
     df = pd.read_sql('installments', engine, index_col='ID').iloc[0:0]
 
     # Retrieve the credit details for the given credit ID from the 'credits' table.
-    cr = pd.read_sql('credits', engine, index_col='ID').loc[id_credit]
+    cr = new_cr.copy()
     cr['D_F_Due'] = pd.Period(cr['D_F_Due'], freq='D')
     
     # Determine the starting installment ID based on existing data.
-    id_inst = df.index.max() + 1 if not df.empty else 1
+    id_inst = df.index.max() if not df.empty else 0
 
     # Generate installment details for each installment in the credit term.
     v_inst   = -npf.pmt(cr['TEM_W_IVA'], cr['N_Inst'], cr['Cap_Grant'])
-    for i in range(1, cr['N_Inst'] + 1):
+    for i in range(int(cr['N_Inst'])):
         id_inst += 1
         
         # Calculate the interest portion of the installment using the IPMT formula.
         interest = -npf.ipmt(cr['TEM_W_IVA'], i, cr['N_Inst'], cr['Cap_Grant'])
-        d_due = cr['D_F_Due'].asfreq('M') + i - 1
+        d_due = cr['D_F_Due'].asfreq('M') + i
         # Populate installment data for the current installment.
         df.loc[id_inst, ['ID_Op', 'Nro_Inst', 'D_Due', 'Capital', 'Interest', 'IVA', 'Total', 'ID_Owner']] = {
             'ID_Op': id_credit,  # Credit operation ID
-            'Nro_Inst': i,  # Installment number
+            'Nro_Inst': i+1,  # Installment number
             'D_Due': pd.Timestamp(year=d_due.year, month=d_due.month, day=cr['D_F_Due'].day),  # Due date
             'Capital': v_inst - interest,  # Principal portion
             'Interest': interest / 1.21,  # Interest portion (excluding VAT)
@@ -116,8 +117,9 @@ def create_installments(id_credit: int):
             'ID_Owner': 1  # Owner ID (assumed fixed value)
         }
 
-    # Save the new installment records to the 'installments' table in the database.
-    df.to_sql('installments', engine, if_exists='append', index=False)
+    if save:
+        # Save the new installment records to the 'installments' table in the database.
+        df.to_sql('installments', engine, if_exists='append', index=False)
 
     # Return only the installments related to the given credit ID.
     return df.loc[df['ID_Op'] == id_credit]
@@ -138,6 +140,8 @@ def new_credit(
         ID_Sale: int = None,
         First_Inst_Sold: int = 0,        
         id_external: int = None,
+        save: bool = False,
+        massive = False
         ) -> pd.DataFrame:
     """
     Creates a new credit record and its corresponding installment schedule.
@@ -171,8 +175,7 @@ def new_credit(
     # Validate that the provided installment value matches the calculated value.
     elif abs(value_inst + V_Inst) > 1:
         raise ValueError(
-            f"The rate ({TEM_W_IVA:,.2%}) and the number of installments ({N_Inst}) don't match "
-            f"the provided installment value ($ {V_Inst:,.2f})."
+            f"The rate ({TEM_W_IVA:,.2%}) and the number of installments ({N_Inst}) don't match the provided installment value ($ {V_Inst:,.2f} vs $ {value_inst:,.2f})."
         )
     
     # Retrieve global settings from the 'settings' table.
@@ -189,7 +192,7 @@ def new_credit(
     # Ensure the first due date is not before the settlement date.
     elif D_F_Due < next_due:
         raise ValueError("The first due date cannot be earlier than the settlement date.")
-    
+
     # Prepare the credit data to be inserted into the database.
     data_cr = {
         'ID_External': int(id_external) if id_external is not None else None,
@@ -210,8 +213,11 @@ def new_credit(
 
     # Load existing credits to determine the next credit ID.
     df = pd.read_sql('credits', engine, index_col='ID')
-    id = df.index.max() + 1 if not df.empty else 1
     new_cr = df.iloc[0:0].copy()
+    if massive:
+        id = massive
+    else:
+        id = df.index.max() + 1 if not df.empty else 1
 
     # Add the new credit record to the DataFrame.
     new_cr.loc[id, [
@@ -220,13 +226,15 @@ def new_credit(
         'D_F_Due', 'ID_Purch', 'ID_Sale'
     ]] = data_cr
 
-    # Save the new credit record to the database.
-    new_cr.to_sql('credits', engine, if_exists='append', index=False)
+    if save:
+        # Save the new credit record to the database.
+        new_cr.to_sql('credits', engine, if_exists='append', index=False)
+
 
     # Generate installments for the new credit and save them to the database.
-    installments = create_installments(id)
+    installments = create_installments(id, new_cr.loc[id], save)
     
-    return df, installments
+    return new_cr, installments
 
 
 def credits_balance() -> pd.DataFrame:
@@ -1034,3 +1042,4 @@ def massive_early_collection(
 
     # Return the processed DataFrames and the error DataFrame
     return collections, penalties, installments, error
+

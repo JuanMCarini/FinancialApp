@@ -7,6 +7,7 @@ import pandas as pd
 # Import your module
 from app.modules.database.connection import engine
 from app.modules.database.companies import add_company, add_bussines_plan
+from app.modules.database.portfolio_manager import portfolio_buyer
 from app.modules.database.customers import add_customer
 from app.modules.database.credit_manager import new_credit
 
@@ -40,6 +41,25 @@ setts.loc[1, ['Detail', 'Type', 'Value']] = {'Detail': 'Periodos de Gracia', 'Ty
 setts.loc[2, ['Detail', 'Type', 'Value']] = {'Detail': 'Tolerancia Cobranzas', 'Type': 'F', 'Value': '0.05'}
 setts.to_sql('settings', engine, if_exists='append', index = False)
 
+path = 'inputs/Onoyen - Cartera Nro. 1.xlsx'
+portfolio_buyer(path, 2, 2, 0.885, True, False, date=pd.Period("2022-12-21"), save=True, model=True)
+
+path = 'inputs/Onoyen - Cartera Nro. 2.xlsx'
+portfolio_buyer(path, 2, 2, 0.87, True, False, date=pd.Period("2023-02-22"), save=True, model=False)
+
+path = 'inputs/Onoyen - Cartera Nro. 3.xlsx'
+portfolio_buyer(path, 2, 2, 0.67, True, False, date=pd.Period("2023/03/21"), save=True, model=False)
+
+path = 'inputs/Onoyen - Cartera Nro. 4.xlsx'
+portfolio_buyer(path, 2, 2, 0.62, True, False, date=pd.Period("2023/04/18"), save=True, model=False)
+
+path = 'inputs/Onoyen - Cartera Nro. 5.xlsx'
+portfolio_buyer(path, 2, 2, 0.59, True, False, date=pd.Period("2023/05/18"), save=True, model=False)
+
+path = 'inputs/Onoyen - Cartera Nro. 6.xlsx'
+portfolio_buyer(path, 2, 2, 0.48, True, False, date=pd.Period("2023/06/15"), save=True, model=False)
+
+'''
 add_customer(
     20363297588,
     36329758,
@@ -102,7 +122,8 @@ nc, inst = new_credit(
     Cap_Grant = 10**6,
     N_Inst = 6,
     TEM_W_IVA = 1.88/365*30,
-    V_Inst = None)
+    V_Inst = None,
+    save = True)
 
 nc, inst = new_credit(
     id_customer = 2,
@@ -112,7 +133,8 @@ nc, inst = new_credit(
     Cap_Grant = 0.5*10**6,
     N_Inst = 12,
     TEM_W_IVA = 1.96/365*30,
-    V_Inst = None)
+    V_Inst = None,
+    save = True)
 
 nc, inst = new_credit(
     id_customer = 1,
@@ -123,5 +145,6 @@ nc, inst = new_credit(
     N_Inst = 18,
     TEM_W_IVA = 2.15/365*30,
     V_Inst = None,
-    First_Inst_Purch = 5)
-
+    First_Inst_Purch = 5,
+    save = True)
+'''
