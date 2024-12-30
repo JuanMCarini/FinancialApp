@@ -10,6 +10,9 @@ inputs = ['Empresa dueña de la cartera.',
           'Nos consiguen clientes de Chubut.', 0.11, 0.0, 0.06, 0.08, 0.095, 0.0135, 0.0145, 0.0, 0.0,
           'Cambio de comisiones.', 0.06, 0.0, 0.06, 0.08, 0.095, 0.0135, 0.0145, 0.0, 0.0]
 
+for i in range(27):
+    inputs.append('Yes')
+
 # Función que simula input() devolviendo un valor de la lista cada vez que se llama
 def mock_input(prompt):
     return inputs.pop(0)

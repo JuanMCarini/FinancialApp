@@ -7,6 +7,7 @@ with open("docs/settings.json", "r") as file:
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column, Integer, String
 from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 # Connection to MySQL
 user = settings['user']

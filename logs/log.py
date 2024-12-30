@@ -9,7 +9,8 @@ from app.modules.database.connection import engine
 from app.modules.database.companies import add_company, add_bussines_plan
 from app.modules.database.portfolio_manager import portfolio_buyer
 from app.modules.database.customers import add_customer
-from app.modules.database.credit_manager import new_credit
+from app.modules.database.credit_manager import new_credit, credits_balance
+from app.modules.database.collection import resource_collection
 
 prov = pd.DataFrame(columns=["ID", "Name"])
 prov.set_index("ID", inplace=True)
@@ -58,6 +59,12 @@ portfolio_buyer(path, 2, 2, 0.59, True, False, date=pd.Period("2023/05/18"), sav
 
 path = 'inputs/Onoyen - Cartera Nro. 6.xlsx'
 portfolio_buyer(path, 2, 2, 0.48, True, False, date=pd.Period("2023/06/15"), save=True, model=False)
+
+balance = credits_balance()
+fecha = pd.Timestamp("2024/12/01")
+for d in balance['D_Due'].unique():
+    if d < fecha:
+        resource_collection(2, balance.loc[balance['D_Due'] == d, 'Total'].sum(), date=d, save=True)
 
 '''
 add_customer(

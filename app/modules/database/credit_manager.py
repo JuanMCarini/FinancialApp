@@ -34,7 +34,7 @@ def create_installments(id_credit: int, new_cr: pd.Series, save: bool = False):
         id_inst += 1
         
         # Calculate the interest portion of the installment using the IPMT formula.
-        interest = -npf.ipmt(cr['TEM_W_IVA'], i, cr['N_Inst'], cr['Cap_Grant'])
+        interest = -npf.ipmt(cr['TEM_W_IVA'], i+1, cr['N_Inst'], cr['Cap_Grant'])
         d_due = cr['D_F_Due'].asfreq('M') + i
         # Populate installment data for the current installment.
         df.loc[id_inst, ['ID_Op', 'Nro_Inst', 'D_Due', 'Capital', 'Interest', 'IVA', 'Total', 'ID_Owner']] = {
