@@ -164,3 +164,6 @@ cython_debug/
 
 # Settings
 docs/settings.json
+
+/inputs
+/outputs

@@ -5,6 +5,7 @@ from app.modules.database.connection import engine
 def add_bussines_plan(
         id_company: int,
         detail: str,
+        date: pd.Timestamp = pd.Timestamp.now(),
         com: float = 0.0,
         com_6: float = 0.0,
         com_9: float = 0.0,
@@ -14,6 +15,8 @@ def add_bussines_plan(
         com_24: float = 0.0,
         com_36: float = 0.0,
         com_48: float = 0.0,
+        com_coll: float = 0.0,
+        com_extra: float = 0.0,
         save: bool = True):
     
     '''
@@ -58,15 +61,13 @@ def add_bussines_plan(
     # Create a new business plan record
     bp = pd.read_sql('business_plan', engine, index_col='ID').iloc[0:0]  # Initialize an empty DataFrame
     # Ensure commission columns have the correct data type
-    bp[['Comission', 'Comission_6', 'Comission_9', 'Comission_12', 'Comission_15', 
-        'Comission_18', 'Comission_24']] = bp[['Comission', 'Comission_6', 'Comission_9', 
-                                               'Comission_12', 'Comission_15', 'Comission_18', 
-                                               'Comission_24']].astype('float')
+    bp[['Comission', 'Comission_6', 'Comission_9', 'Comission_12', 'Comission_15', 'Comission_18', 'Comission_24', 'Comission_Collection', 'Comission_Extra']] = bp[['Comission', 'Comission_6', 'Comission_9',  'Comission_12', 'Comission_15', 'Comission_18',  'Comission_24', 'Comission_Collection', 'Comission_Extra']].astype('float')
 
     # Populate the business plan with provided data
     bp.loc[0] = {
         'ID_Company': id_company,
         'Detail': detail,
+        'Date': date,
         'Comission': com,
         'Comission_6': com_6,
         'Comission_9': com_9,
@@ -75,7 +76,9 @@ def add_bussines_plan(
         'Comission_18': com_18,
         'Comission_24': com_24,
         'Comission_36': com_36,
-        'Comission_48': com_48
+        'Comission_48': com_48,
+        'Comission_Collection': com_coll,
+        'Comission_Extra': com_extra
     }
 
     if save:
@@ -155,6 +158,7 @@ def add_company(
                 add_bussines_plan(
                     new_company_id,
                     input('Detalle del plan comercial:'),  # Prompt user for plan details
+                    pd.Timestamp(input('Fecha:')),
                     float(input('Comisión por fondeo:')),
                     float(input('Comisión por cobranza (plazo 6):')),
                     float(input('Comisión por cobranza (plazo 9):')),
@@ -163,7 +167,9 @@ def add_company(
                     float(input('Comisión por cobranza (plazo 18):')),
                     float(input('Comisión por cobranza (plazo 24):')),
                     float(input('Comisión por cobranza (plazo 36):')),
-                    float(input('Comisión por cobranza (plazo 48):'))
+                    float(input('Comisión por cobranza (plazo 48):')),
+                    float(input('Comisión por cobranza:')),
+                    float(input('Comisión sobre cada crédito:'))
                 )
             else:
                 add_bussines_plan(new_company_id, input('Detalle del plan comercial:'))  # Minimal business plan

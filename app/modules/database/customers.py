@@ -1,12 +1,12 @@
 import os
 import pandas as pd
-
+import numpy as np
 # Import your module
 from app.modules.database.connection import engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import update
 
-from app.modules.database.structur_databases import Customer
+from app.modules.database.structur_databases import Customer, MaritalStatus
 
 
 # Function to convert a full gender label to its corresponding abbreviation
@@ -60,6 +60,8 @@ def add_customer(CUIL: int = None,
                  Gender: str = None,
                  Date_Birth: pd.Timestamp = None,
                  Age_at_Discharge: pd.Timestamp = None,
+                 Mar_Status: MaritalStatus = MaritalStatus.SINGLE,
+                 Country: str = 'Argentina',
                  ID_Province: int = None,
                  Locality: str = None,
                  Street: str = None,
@@ -125,7 +127,7 @@ def add_customer(CUIL: int = None,
 
     if customer.empty:
         # Create a DataFrame template for new customers
-        new_customer = pd.DataFrame(columns=['CUIL', 'DNI', 'Last_Name', 'Name', 'Gender', 'Date_Birth', 'Age_at_Discharge', 
+        new_customer = pd.DataFrame(columns=['CUIL', 'DNI', 'Last_Name', 'Name', 'Gender', 'Marital_Status', 'Date_Birth', 'Age_at_Discharge', 
                                               'ID_Province', 'Locality', 'Street', 'Nro', 'CP', 'Feature', 'Telephone', 
                                               'Seniority', 'Salary', 'CBU', 'Collection_Entity', 'Employer', 'Dependence', 
                                               'CUIT_Employer', 'ID_Empl_Prov', 'Empl_Loc', 'Empl_Adress'])
@@ -137,8 +139,10 @@ def add_customer(CUIL: int = None,
             'Last_Name': Last_Name,
             'Name': Name,
             'Gender': categorical_gender(Gender),  # Convert/validate gender
+            'Marital_Status': Mar_Status,
             'Date_Birth': Date_Birth,
             'Age_at_Discharge': Age_at_Discharge,
+            'Country': Country,
             'ID_Province': ID_Province,
             'Locality': Locality,
             'Street': Street,
@@ -159,7 +163,7 @@ def add_customer(CUIL: int = None,
         }
 
         # Insert the customer data into the DataFrame
-        new_customer.loc[0, ['CUIL', 'DNI', 'Last_Name', 'Name', 'Gender', 'Date_Birth', 'Age_at_Discharge', 
+        new_customer.loc[0, ['CUIL', 'DNI', 'Last_Name', 'Name', 'Gender', 'Marital_Status', 'Date_Birth', 'Age_at_Discharge', 'Country',
                              'ID_Province', 'Locality', 'Street', 'Nro', 'CP', 'Feature', 'Telephone', 'Seniority', 
                              'Salary', 'CBU', 'Collection_Entity', 'Employer', 'Dependence', 'CUIT_Employer', 
                              'ID_Empl_Prov', 'Empl_Loc', 'Empl_Adress']] = customer_data
@@ -167,6 +171,7 @@ def add_customer(CUIL: int = None,
     else:
         new_customer = customer.iloc[0].copy()
         CUIL = new_customer['CUIL']
+        
     # Query the existing customers table
     df = pd.read_sql('customers', engine, index_col='ID')
     
