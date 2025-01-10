@@ -168,7 +168,7 @@ def new_credit(
     return new_cr, installments
 
 
-def credits_balance() -> pd.DataFrame:
+def credits_balance(date: pd.Timestamp = pd.Timestamp.now()) -> pd.DataFrame:
     """
     Calculates the balance of credits by adjusting the installment amounts based on the recorded collections.
 
@@ -182,10 +182,13 @@ def credits_balance() -> pd.DataFrame:
 
     # Load the collections table and convert financial columns to float
     df_clt = pd.read_sql('collection', engine, index_col='ID')
+    df_clt = df_clt[df_clt['D_Emission'] <= date]
     df_clt[['Capital', 'Interest', 'IVA', 'Total']] = df_clt[['Capital', 'Interest', 'IVA', 'Total']].astype(float)
     
     # Load the installments table and convert financial columns to float
     df_its = pd.read_sql('installments', engine, index_col='ID')
+    credits = pd.read_sql('credits', engine, index_col='ID')
+    df_its = df_its[df_its['ID_Op'].isin(credits[credits['Date_Settlement'] <= date].index)]
     df_its[['Capital', 'Interest', 'IVA', 'Total']] = df_its[['Capital', 'Interest', 'IVA', 'Total']].astype(float)
     
     # Group collections by installment ID and calculate the total for each column

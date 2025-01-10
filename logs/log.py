@@ -9,6 +9,8 @@ from app.modules.database.portfolio_manager import portfolio_buyer, add_portfoli
 from app.modules.database.credit_manager import credits_balance
 from app.modules.database.collection import resource_collection, charging, collection_w_early_cancel, delete_collection_by_id, TypeDataCollection
 from sqlalchemy import Enum
+from sqlalchemy.exc import IntegrityError as alIE
+from pymysql.err import IntegrityError as myIE
 
 sql_script_path = 'docs/AppStructure.sql'
 
@@ -108,6 +110,8 @@ fecha = pd.Timestamp("2024/12/30")
 resource_collection(2, balance.loc[balance['D_Due'] <= fecha, 'Total'].sum(), date=fecha, save=True)
 
 print('Cartera de créditos Onoyen migrada, correctamente.')
+
+print('Comenzamos a migar la cartera de AMUF.')
 
 class MaritalStatus(Enum):
     SINGLE = 'SINGLE'
@@ -211,6 +215,8 @@ for i in range(3,6):
         df.loc[df['Date_Settlement'] > bp.loc[i, 'Date']].to_excel(path, index=True)
     portfolio_buyer(path, 3, i, 0.0, False, True, False, save=True)
 
+print('Migramos los créditos, y empezamos a migrar las cobranzas.')
+
 coll = pd.read_excel('inputs/Reporte - Cobranzas - 24-12-31.xlsx')
 coll = coll[coll['Fondeador'] != 'ONOYEN']
 coll.drop(columns=['GS', 'PU'], inplace=True)
@@ -286,9 +292,15 @@ cobranzas = pd.DataFrame(coll.loc[coll['Tipo Cobranza'] != 'COBRANZA X CANCEL AN
 
 for date, id in cobranzas.index:
     if 'COBRANZA X CANCEL ANT' not in coll.loc[coll['Emisión'] == date, 'Tipo Cobranza'].values:
-        charging(TypeDataCollection.ID_Op, id, -cobranzas.loc[(date, id), 'TOTAL'], 3, date, True)
+        try:
+            charging(TypeDataCollection.ID_Op, id, -cobranzas.loc[(date, id), 'TOTAL'], 3, date, True)
+        except myIE or alIE:
+            raise print(f'ID Op.: {id} - {date} - $ {-cobranzas.loc[(date, id), 'TOTAL']:,.2f}')
     else:
-        collection_w_early_cancel(TypeDataCollection.ID_Op, id, -cobranzas.loc[(date, id), 'TOTAL'], 3, date, True)
+        try:
+            collection_w_early_cancel(TypeDataCollection.ID_Op, id, -cobranzas.loc[(date, id), 'TOTAL'], 3, date, True)
+        except myIE or alIE:
+            raise print(f'ID Op.: {id} - {date} - $ {-cobranzas.loc[(date, id), 'TOTAL']:,.2f}')
 
 collections = pd.read_sql('collection', engine, index_col='ID')
 installments = pd.read_sql('installments', engine, index_col='ID')
@@ -316,36 +328,40 @@ new_collections.to_sql('collection', engine, index=False, if_exists='append')
 print('Cartera de créditos AMUF migrada.')
 
 balance = credits_balance()
+# Leer y transformar datos
 inv = pd.read_excel('inputs/Reporte - Inv. Créditos - 24-12-31.xlsx', index_col='Id. Op.')
 inv = inv.loc[inv['Fondeador'] != 'ONOYEN']
+
 credits = pd.read_sql('credits', engine, index_col='ID')
 credits.loc[~credits['ID_External'].isna(), 'ID_External'] = credits.loc[~credits['ID_External'].isna(), 'ID_External'].astype(np.int64)
-inv['Clave Externa'] = inv['Clave Externa'].str.split("CH_")
-inv['Clave Externa'] = inv['Clave Externa'].apply(lambda x: x[1])
-inv['Clave Externa'] = inv['Clave Externa'].astype(np.int64)
-inv['ID'] = inv['Clave Externa'].apply(lambda x: credits.loc[credits['ID_External'] == x].index if not credits.loc[credits['ID_External'] == x].empty else None)
-coll_org_id['ID'] = coll_org_id['ID'].astype(np.int64)
 
-for id in coll_org_id['ID'].unique():
-    imp = inv.loc[inv['ID'] == id, 'Cap. Cuotas Imp. (V/aV)'].sum()
-    bal = balance.loc[balance['ID_Op'] == id, 'Capital'].sum()
-    if abs(imp - bal) > 1:
-        print(f'Capital - {id}: $ {imp:,.2f} - $ {bal:,.2f}')
+# Manejo robusto de Clave Externa
+inv['Clave Externa'] = inv['Clave Externa'].str.split("CH_").apply(lambda x: x[1] if isinstance(x, list) and len(x) > 1 else None)
+inv['Clave Externa'] = pd.to_numeric(inv['Clave Externa'], errors='coerce').astype('Int64')
 
-    imp = inv.loc[inv['ID'] == id, 'Int. Cuotas Imp. (V/aV)'].sum()
-    bal = balance.loc[balance['ID_Op'] == id, 'Interest'].sum()
-    if abs(imp - bal) > 1:
-        print(f'Interés - {id}: $ {imp:,.2f} - $ {bal:,.2f}')
+coll_org_id['ID'] = pd.to_numeric(coll_org_id['ID'], errors='coerce').astype('Int64')
 
-    imp = inv.loc[inv['ID'] == id, 'Iva Cuotas Imp. (V/aV)'].sum()
-    bal = balance.loc[balance['ID_Op'] == id, 'IVA'].sum()
+# Validar discrepancias
+for id in coll_org_id['ID_Externo'].dropna().unique():
+    imp = inv.loc[inv['Clave Externa'] == id, 'Cap. Cuotas Imp. (V/aV)'].sum()
+    bal = balance.loc[balance['ID_Op'] == credits.loc[credits['ID_External'] == id].index.values[0], 'Capital'].sum()
     if abs(imp - bal) > 1:
-        print(f'IVA - {id}: $ {imp:,.2f} - $ {bal:,.2f}')
+        print(f'Discrepancia en Capital para ID {id}: Calculado $ {imp:,.2f} - Reportado $ {bal:,.2f}')
 
-    imp = inv.loc[inv['ID'] == id, 'Imp. Cuotas Imp. (V/aV)'].sum()
-    bal = balance.loc[balance['ID_Op'] == id, 'Total'].sum()
+    imp = inv.loc[inv['Clave Externa'] == id, 'Int. Cuotas Imp. (V/aV)'].sum()
+    bal = balance.loc[balance['ID_Op'] == credits.loc[credits['ID_External'] == id].index.values[0], 'Interest'].sum()
     if abs(imp - bal) > 1:
-        print(f'Total - {id}: $ {imp:,.2f} - $ {bal:,.2f}')
+        print(f'Discrepancia en Interés para ID {id}: Calculado $ {imp:,.2f} - Reportado $ {bal:,.2f}')
+
+    imp = inv.loc[inv['Clave Externa'] == id, 'Iva Cuotas Imp. (V/aV)'].sum()
+    bal = balance.loc[balance['ID_Op'] == credits.loc[credits['ID_External'] == id].index.values[0], 'IVA'].sum()
+    if abs(imp - bal) > 1:
+        print(f'Discrepancia en IVA para ID {id}: Calculado $ {imp:,.2f} - Reportado $ {bal:,.2f}')
+
+    imp = inv.loc[inv['Clave Externa'] == id, 'Imp. Cuotas Imp. (V/aV)'].sum()
+    bal = balance.loc[balance['ID_Op'] == credits.loc[credits['ID_External'] == id].index.values[0], 'Total'].sum()
+    if abs(imp - bal) > 1:
+        print(f'Discrepancia en Total para ID {id}: Calculado $ {imp:,.2f} - Reportado $ {bal:,.2f}')
 
 imp = inv['Imp. Cuotas Imp. (V/aV)'].sum()
 if abs(imp - balance['Total'].sum()) < 10:

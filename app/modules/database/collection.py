@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.exc import IntegrityError
 from app.modules.database.credit_manager import credits_balance
 from app.modules.database.structur_databases import Company, Collection
+from sqlalchemy.exc import IntegrityError as alIE
+from pymysql.err import IntegrityError as myIE
 
 
 
@@ -193,15 +195,20 @@ def _process_early_payment(complete_balance, amount, collection, date, early: bo
 
 def _process_penalty(amount, credits, date, id_credits, collection, save, early: bool = False):
     """Process a penalty if there is a remaining amount."""
-    if amount <= 0.0:
-        return collection
+    cr_penalty = credits.iloc[0:0].copy()
+    inst = pd.read_sql('installments', engine, index_col='ID')
+    id_penalty = inst.index.max() + 1
+    inst = inst.iloc[0:0].copy()
+
+    if amount <= 0.009:
+        amount = 0.0
+        return collection, cr_penalty, inst
 
     penalty = amount / 1.21
     iva = penalty * 0.21
 
     id_cst = credits.loc[credits.index.isin(id_credits), 'ID_Client'].values[0]
     
-    cr_penalty = credits.iloc[0:0].copy()
     cr_penalty.loc[0] = {
         'ID_Client': id_cst,
         'Date_Settlement': date,
@@ -214,9 +221,6 @@ def _process_penalty(amount, credits, date, id_credits, collection, save, early:
         'D_F_Due': date,
     }
 
-    inst = pd.read_sql('installments', engine, index_col='ID')
-    id_penalty = inst.index.max() + 1
-    inst = inst.iloc[0:0].copy()
     inst.loc[0] = {
         'ID_Op': pd.read_sql('credits', engine, index_col='ID').index.max() + 1,
         'Nro_Inst': 1,
@@ -239,16 +243,11 @@ def _process_penalty(amount, credits, date, id_credits, collection, save, early:
         'Total': amount
     }
 
-    if save and not early:
+    if save:
         cr_penalty.to_sql('credits', engine, index=False, if_exists='append')
         inst.to_sql('installments', engine, index=False, if_exists='append')
-        return collection, pd.DataFrame(), pd.DataFrame()
-    elif save and early:
-        cr_penalty.to_sql('credits', engine, index=False, if_exists='append')
-        inst.to_sql('installments', engine, index=False, if_exists='append')
-        return collection, cr_penalty, inst
-    else:
-        return collection, cr_penalty, inst
+        
+    return collection, cr_penalty, inst
 
 
 def _process_remaining_amount(amount, collection, balance, credits, date, id_credits, save, early: bool = False):
@@ -282,15 +281,16 @@ def _solve_rounding(collection, balance, date, early: bool = False, id_credits =
 
     # Add rounding adjustment entries to the collection for each identified installment
     for i in rounding.index:
-        collection.loc[collection.index.max() + 1] = {
-            'ID_Inst': i,
-            'D_Emission': date,
-            'Type_Collection': 'REDONDEO',
-            'Capital': rounding.loc[i, 'Capital'],
-            'Interest': rounding.loc[i, 'Interest'],
-            'IVA': rounding.loc[i, 'IVA'],
-            'Total': rounding.loc[i, 'Total']
-        }
+        if abs(rounding.loc[i, 'Total']) >= 0.01:
+            collection.loc[collection.index.max() + 1] = {
+                'ID_Inst': i,
+                'D_Emission': date,
+                'Type_Collection': 'REDONDEO',
+                'Capital': rounding.loc[i, 'Capital'],
+                'Interest': rounding.loc[i, 'Interest'],
+                'IVA': rounding.loc[i, 'IVA'],
+                'Total': rounding.loc[i, 'Total']
+            }
     
     # Return the updated collection DataFrame
     return collection
@@ -375,7 +375,7 @@ def charging(
     collection = _process_regular_collections(balance, amount, date)
 
     # Adjust remaining amount and process early payments or penalties if necessary
-    collection, cr_penalty, inst = _process_remaining_amount(amount, collection, balance, credits, date, id_credits, save)
+    collection, cr_penalty, inst = _process_remaining_amount(amount, collection, balance, credits, date, id_credits, save=False)
     
     # Remove zero-total rows and round numerical columns to two decimal places
     collection = collection.loc[collection['Total'] != 0]
@@ -387,13 +387,14 @@ def charging(
 
     # Save or return the results
     if save:
-        collection.to_sql('collection', engine, index=False, if_exists='append')
-        cr_penalty.to_sql('credits', engine, index=False, if_exists='append')
-        inst.to_sql('installments', engine, index=False, if_exists='append')
-
-        return collection
-    else:
-        return collection, cr_penalty, inst
+        try:
+            if not (cr_penalty.empty or inst.empty):
+                cr_penalty.to_sql('credits', engine, index=False, if_exists='append')
+                inst.to_sql('installments', engine, index=False, if_exists='append')
+            collection.to_sql('collection', engine, index=False, if_exists='append')
+        except alIE or myIE:
+            print(f'ID: {identifier}\nPenalty: {cr_penalty}\nInstallment:{inst}\nCollections:{collection}')
+    return collection, cr_penalty, inst
 
 
 def _process_early_settlement(collection, early, date, collection_type, amount):
@@ -483,7 +484,7 @@ def collection_w_early_cancel(
     balance.loc[balance.index.isin(collection['ID_Inst']), ['Capital', 'Interest', 'IVA', 'Total']] -= collection.groupby('ID_Inst')[['Capital', 'Interest', 'IVA', 'Total']].sum()
 
     # Adjust remaining amount and process any penalties or adjustments
-    collection, penalties, installments = _process_remaining_amount(amount, collection, balance, credits, date, id_credits, save, True)
+    collection, penalties, installments = _process_remaining_amount(amount, collection, balance, credits, date, id_credits, False, True)
     amount -= collection.loc[collection['Type_Collection'] == 'PENALTY', 'Total'].sum()
     
     # Clean up the collection DataFrame and ensure proper rounding
@@ -495,9 +496,16 @@ def collection_w_early_cancel(
     _solve_rounding(collection, balance, date, True, id_credits)
 
     # Save or return the collection
-    if save:    
-        collection.to_sql('collection', engine, index=False, if_exists='append')
+    if save:  
+        try:
+            if not (penalties.empty or installments.empty):
+                penalties.to_sql('credits', engine, index=False, if_exists='append')
+                installments.to_sql('installments', engine, index=False, if_exists='append')
+            collection.to_sql('collection', engine, index=False, if_exists='append')
+        except alIE or myIE:
+            print(f'{not (penalties.empty or installments.empty)} - {(penalties.empty)} - {(installments.empty)}')  
 
+        
     return collection, penalties, installments
 
 
