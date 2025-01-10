@@ -281,7 +281,7 @@ def _solve_rounding(collection, balance, date, early: bool = False, id_credits =
 
     # Add rounding adjustment entries to the collection for each identified installment
     for i in rounding.index:
-        if abs(rounding.loc[i, 'Total']) >= 0.01:
+        if abs(rounding.loc[i, 'Total']) >= 0.001:
             collection.loc[collection.index.max() + 1] = {
                 'ID_Inst': i,
                 'D_Emission': date,
@@ -493,7 +493,7 @@ def collection_w_early_cancel(
         collection[c] = collection[c].round(2)
 
     # Solve rounding discrepancies
-    _solve_rounding(collection, balance, date, True, id_credits)
+    collection = _solve_rounding(collection, balance, date, True, id_credits)
 
     # Save or return the collection
     if save:  

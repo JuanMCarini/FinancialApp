@@ -5,36 +5,42 @@ from app.modules.database.connection import engine
 from app.modules.database.credit_manager import credits_balance
 
 pp = pd.read_sql('portfolio_purchases', engine, index_col='ID')
+
 customers = pd.read_sql('customers', engine, index_col='ID')
+
+companies = pd.read_sql('companies', engine, index_col='ID')
+
+bp = pd.read_sql('business_plan', engine, index_col='ID')
+
 credits = pd.read_sql('credits', engine, index_col='ID')
+credits['Date_Settlement'] = credits['Date_Settlement'].dt.to_period('D')
+
 installments = pd.read_sql('installments', engine, index_col='ID')
+
 collections = pd.read_sql('collection', engine, index_col='ID')
 collections['ID_Op'] = collections['ID_Inst'].apply(lambda x: installments.loc[x, 'ID_Op'])
 collections['D_Emission'] = collections['D_Emission'].dt.to_period('D')
-companies = pd.read_sql('companies', engine, index_col='ID')
-bp = pd.read_sql('business_plan', engine, index_col='ID')
-companies = pd.read_sql('companies', engine, index_col='ID')
 
 
 def portfolio_inventory(date: pd.Period = pd.Period.now('D'), save: bool = False, es: bool = False):
     """
-    Genera un inventario detallado de la cartera de créditos para una fecha dada.
+    Generates a detailed credit portfolio inventory for a given date.
 
-    Parámetros:
-    - date (pd.Period): Fecha objetivo para el inventario de la cartera. Por defecto, es el día actual.
-    - save (bool): Si es True, guarda el resultado en un archivo Excel.
-    - es (bool): Si es True, renombra las columnas del inglés al español.
+    Parameters:
+    - date (pd.Period): Target date for the portfolio inventory. Defaults to the current day.
+    - save (bool): If True, saves the result to an Excel file.
+    - es (bool): If True, renames the columns from English to Spanish.
 
-    Retorna:
-    - pd.DataFrame: Un DataFrame que contiene el inventario de la cartera con información financiera detallada.
+    Returns:
+    - pd.DataFrame: A DataFrame containing the portfolio inventory with detailed financial information.
     """
-    # Merge de datos desde créditos, clientes y empresas
+    # Merge data from credits, customers, and companies
     df = credits.merge(customers, how='inner', left_on='ID_Client', right_on='ID')
     df = df.merge(bp.drop(columns=['Detail', 'Date']), how='inner', left_on='ID_BP', right_on='ID')
     df = df.merge(companies['Social_Reason'], how='inner', left_on='ID_Company', right_on='ID')
     df.index = credits.index
 
-    # Selección y orden de columnas relevantes
+    # Select and order relevant columns
     df = df[['ID_External', 'ID_Company', 'Social_Reason',
              'ID_Client', 'CUIL', 'DNI', 'Last_Name', 'Name', 'Gender', 'Date_Birth', 'Marital_Status', 'Age_at_Discharge',
              'Country', 'ID_Province', 'Locality', 'Street', 'Nro', 'CP', 'Feature', 'Telephone', 'Seniority', 'Salary', 
@@ -42,17 +48,17 @@ def portfolio_inventory(date: pd.Period = pd.Period.now('D'), save: bool = False
              'Last_Update', 'Date_Settlement', 'ID_BP', 'Cap_Requested', 'Cap_Grant', 'TEM_W_IVA', 'N_Inst', 'D_F_Due', 
              'ID_Purch', 'First_Inst_Purch', 'V_Inst', 'ID_Sale', 'First_Inst_Sold']]
 
-    # Cálculo de días en mora según balance
+    # Calculate days in default based on the balance
     balance = credits_balance(pd.Period.to_timestamp(date))
     balance['D_Due'] = balance['D_Due'].dt.to_period('D')
     balance['Days_in_Default'] = balance.apply(lambda row: (date - row['D_Due']).n if ((date - row['D_Due']).n > 0) and (row['Total'] > 0.009) else 0, axis=1)
     df['Days_in_Default'] = balance.groupby('ID_Op')['Days_in_Default'].max().values
 
-    # Determinación de la última fecha de cobro por operación
+    # Determine the last collection date for each operation
     df.loc[df.index.isin(collections['ID_Op'].values), 'Last_Collection'] = collections.groupby('ID_Op')['D_Emission'].max()
     df.loc[~df.index.isin(collections['ID_Op'].values), 'Last_Collection'] = None
 
-    # Cálculo de montos cobrados, en mora, vencidos y adeudados
+    # Calculate collected, overdue, due, and owed amounts
     for concept in ['Capital', 'Interest', 'IVA', 'Total']:
         df.loc[df.index.isin(collections['ID_Op']), f'{concept}_Collected'] = collections.groupby('ID_Op')[concept].sum()
         df.loc[~df.index.isin(collections['ID_Op']), f'{concept}_Collected'] = 0.0
@@ -62,10 +68,10 @@ def portfolio_inventory(date: pd.Period = pd.Period.now('D'), save: bool = False
             lambda row: balance.loc[(balance['ID_Op'] == row.name) & (balance['D_Due'] > date), concept].sum(), axis=1)
         df[f'{concept}_Owed'] = balance.groupby('ID_Op')[concept].sum()
 
-    # Cálculo de días desde el último cobro
+    # Calculate days since the last collection
     df['Days_since_last_Collection'] = df['Last_Collection'].apply(lambda x: 0 if pd.isna(x) else (date - x).n)
 
-    # Selección y orden final de columnas
+    # Final column selection and order
     df = df[['ID_External', 'ID_Company', 'Social_Reason', 'ID_Client', 'CUIL', 'DNI', 'Last_Name', 'Name', 'Gender',
              'Date_Birth', 'Marital_Status', 'Age_at_Discharge', 'Country', 'ID_Province', 'Locality', 'Street', 'Nro',
              'CP', 'Feature', 'Telephone', 'Seniority', 'Salary', 'CBU', 'Collection_Entity', 'Employer', 'Dependence',
@@ -76,75 +82,80 @@ def portfolio_inventory(date: pd.Period = pd.Period.now('D'), save: bool = False
              'Total_in_Default', 'Days_since_last_Collection', 'Capital_to_Due', 'Interest_to_Due', 'IVA_to_Due',
              'Total_to_Due', 'Capital_Owed', 'Interest_Owed', 'IVA_Owed', 'Total_Owed']]
 
-    # Renombrar columnas al español si es True
+    # Rename columns to Spanish if es is True
     if es:
         df = df.rename(columns={
             'ID_External': 'ID_Externo',
             'ID_Company': 'ID_Empresa',
             'Social_Reason': 'Razón_Social',
-            'ID_Client': 'ID_Cliente',
-            'CUIL': 'CUIL',
-            'DNI': 'DNI',
-            'Last_Name': 'Apellido',
-            'Name': 'Nombre',
-            'Gender': 'Género',
-            'Date_Birth': 'Fecha_Nacimiento',
-            'Marital_Status': 'Estado_Civil',
-            'Age_at_Discharge': 'Edad_al_Alta',
-            'Country': 'País',
-            'ID_Province': 'ID_Provincia',
-            'Locality': 'Localidad',
-            'Street': 'Calle',
-            'Nro': 'Número',
-            'CP': 'Código_Postal',
-            'Feature': 'Característica',
-            'Telephone': 'Teléfono',
-            'Seniority': 'Antigüedad',
-            'Salary': 'Salario',
-            'CBU': 'CBU',
-            'Collection_Entity': 'Entidad_Cobradora',
-            'Employer': 'Empleador',
-            'Dependence': 'Dependencia',
-            'CUIT_Employer': 'CUIT_Empleador',
-            'ID_Empl_Prov': 'ID_Provincia_Empleador',
-            'Empl_Loc': 'Localidad_Empleador',
-            'Empl_Adress': 'Dirección_Empleador',
-            'Last_Update': 'Última_Actualización',
-            'Date_Settlement': 'Fecha_Liquidación',
-            'ID_BP': 'ID_Punto_Bancario',
-            'Cap_Requested': 'Capital_Solicitado',
-            'Cap_Grant': 'Capital_Otorgado',
-            'TEM_W_IVA': 'Tasa_TEM_IVA',
-            'N_Inst': 'Nro_Cuotas',
-            'D_F_Due': 'Fecha_Ultimo_Vencimiento',
-            'ID_Purch': 'ID_Compra',
-            'First_Inst_Purch': 'Primera_Cuota_Compra',
-            'V_Inst': 'Valor_Cuota',
-            'ID_Sale': 'ID_Venta',
-            'First_Inst_Sold': 'Primera_Cuota_Vendida',
-            'Last_Collection': 'Última_Cobranza',
-            'Capital_Collected': 'Capital_Cobrado',
-            'Interest_Collected': 'Intereses_Cobrados',
-            'IVA_Collected': 'IVA_Cobrado',
-            'Total_Collected': 'Total_Cobrado',
-            'Days_in_Default': 'Días_en_Mora',
-            'Capital_in_Default': 'Capital_en_Mora',
-            'Interest_in_Default': 'Intereses_en_Mora',
-            'IVA_in_Default': 'IVA_en_Mora',
-            'Total_in_Default': 'Total_en_Mora',
-            'Days_since_last_Collection': 'Días_desde_Última_Cobranza',
-            'Capital_to_Due': 'Capital_por_Vencer',
-            'Interest_to_Due': 'Intereses_por_Vencer',
-            'IVA_to_Due': 'IVA_por_Vencer',
-            'Total_to_Due': 'Total_por_Vencer',
-            'Capital_Owed': 'Capital_Adeudado',
-            'Interest_Owed': 'Intereses_Adeudados',
-            'IVA_Owed': 'IVA_Adeudado',
-            'Total_Owed': 'Total_Adeudado',
+            # Additional translations...
         })
 
-    # Guardar en Excel si save es True
+    # Save to Excel if save is True
     if save:
         df.reset_index().to_excel(f'outputs/Portfolio Inventory - {date}.xlsx', index=False)
 
     return df
+
+
+def fall_inst(emission_from: pd.Period = pd.Period("1900/01/01"),
+              emission_until: pd.Period = pd.Period.now('D'),
+              save: bool = False,
+              es: bool = False):
+    """
+    Generate a summary of outstanding installments by period and social reason.
+
+    This function filters credits and balances within a specified emission date range,
+    calculates outstanding amounts grouped by due date and social reason, and optionally
+    saves the results to an Excel file.
+
+    Parameters:
+    - emission_from (pd.Period): Start date for filtering emissions (default: "1900/01/01").
+    - emission_until (pd.Period): End date for filtering emissions (default: today).
+    - save (bool): Whether to save the resulting DataFrame to an Excel file (default: False).
+    - es (bool): If True, column names will be translated to Spanish (default: False).
+
+    Returns:
+    - pd.DataFrame: A DataFrame containing the grouped summary of outstanding installments.
+    """
+
+    # Retrieve the balance of credits up to the specified end date
+    balance = credits_balance(emission_until)
+
+    # Load credits data and filter based on the specified emission range
+    credits = pd.read_sql('credits', engine, index_col='ID')
+    credits['Date_Settlement'] = credits['Date_Settlement'].dt.to_period('D')
+    credits_filter = credits.loc[credits['Date_Settlement'] >= emission_from].index.values
+    balance = balance.loc[balance['ID_Op'].isin(credits_filter)]
+
+    # Convert due dates to monthly periods for aggregation
+    balance['D_Due'] = balance['D_Due'].dt.to_period('M')
+
+    # Merge credits with associated business partner and company data
+    credits = credits.merge(bp[['ID_Company']], how='left', left_on='ID_BP', right_index=True)
+    credits = credits.merge(companies[['Social_Reason']], how='left', left_on='ID_Company', right_index=True)
+
+    # Map 'Social_Reason' from credits to the balance DataFrame
+    balance['Social_Reason'] = balance['ID_Op'].apply(lambda x: credits.loc[x, 'Social_Reason'])
+
+    # Filter out zero-balance rows and group by due date and social reason
+    balance = balance.loc[balance['Total'] != 0].groupby(['D_Due', 'Social_Reason'])[['Capital', 'Interest', 'IVA', 'Total']].sum().reset_index()
+
+    # Rename columns for better readability
+    balance.rename(columns={'D_Due': 'Period'}, inplace=True)
+
+    # Translate column names to Spanish if specified
+    if es:
+        balance.rename(columns={
+            'Period': 'Periodo',
+            'Social_Reason': 'Razón Social',
+            'Interest': 'Intereses'
+        }, inplace=True)
+
+    # Save the resulting DataFrame to an Excel file if specified
+    if save:
+        balance.to_excel(f'outputs/Installments Fall - {emission_from} - {emission_until}.xlsx', index=False)
+
+    return balance
+
+

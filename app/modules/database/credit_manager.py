@@ -182,6 +182,9 @@ def credits_balance(date: pd.Timestamp = pd.Timestamp.now()) -> pd.DataFrame:
 
     # Load the collections table and convert financial columns to float
     df_clt = pd.read_sql('collection', engine, index_col='ID')
+    if type(date) == pd.Period:
+        date = pd.Period.to_timestamp(date)
+    
     df_clt = df_clt[df_clt['D_Emission'] <= date]
     df_clt[['Capital', 'Interest', 'IVA', 'Total']] = df_clt[['Capital', 'Interest', 'IVA', 'Total']].astype(float)
     
