@@ -1,11 +1,14 @@
 import os
 import pandas as pd
 import numpy_financial as npf
+from sqlalchemy import MetaData, Table
+from sqlalchemy.orm import Session
+
 
 # Import your module
 from app.modules.database.connection import engine
 from app.modules.database.customers import id_province, categorical_gender, add_customer, MaritalStatus
-from app.modules.database.credit_manager import new_credit
+from app.modules.database.credit_manager import new_credit, credits_balance
 
 
 def validate_supplier_and_business_plan(id_supplier, id_bp):
@@ -460,3 +463,151 @@ def portfolio_buyer(
 
     # Return the processed data.
     return df, new_customers, pp, new_credits, installments, collections
+
+
+def portfolio_seller(date: pd.Period,
+                     tna: float,
+                     va: float,
+                     id_company: int,
+                     sort_by_tem: bool = False,
+                     sort_by_emission: bool = False,
+                     sort_tem_emission: bool = False,
+                     asc: bool = True,
+                     default: bool = False,
+                     resource: bool = False,
+                     iva: bool = False,
+                     save: bool = False):
+    """
+    Perform portfolio analysis and optionally save the results to a database.
+
+    Parameters:
+        date (pd.Period): Reference date for filtering and calculations.
+        tna (float): Nominal annual interest rate.
+        va (float): Available value for financing.
+        id_company (int): Company ID to assign ownership.
+        sort_by_tem (bool): Sort by the TEM (True/False).
+        sort_by_emission (bool): Sort by emission date (True/False).
+        sort_tem_emission (bool): Sort by TEM and emission date (True/False).
+        asc (bool): Sorting order (ascending if True, descending if False).
+        default (bool): Include defaulted installments (True/False).
+        resource (bool): Indicates if resource flag should be set.
+        iva (bool): If True, exclude IVA from calculations.
+        save (bool): If True, save the results to the database.
+
+    Returns:
+        tuple: Filtered installments (`full_inst`), grouped installments (`fall_inst`), and cash flow (`flow`).
+    """
+    # Step 1: Filter Installments
+    installments = pd.read_sql('installments', engine, index_col='ID')
+    installments['D_Due'] = installments['D_Due'].dt.to_period('D')
+    balance = credits_balance()
+    balance['D_Due'] = balance['D_Due'].dt.to_period('D')
+    if default:
+        full_inst = installments.loc[(balance['Total'] == installments['Total'])].copy()
+    else:
+        full_inst = installments.loc[
+            (balance['Total'] == installments['Total']) & (installments['D_Due'] >= date)
+        ].copy()
+    
+    if iva:
+        full_inst['IVA'] = 0.0
+        full_inst['Total'] = full_inst['Capital'] + full_inst['Interest']
+    
+    full_inst = installments.loc[
+        (full_inst['ID_Owner'] == 1) &
+        (balance['Total'] == installments['Total']) &
+        (installments['D_Due'] >= date)
+    ].copy()
+    
+    full_inst[f'{date}'] = full_inst['D_Due'].apply(lambda x: (x - date).n)
+    credits = pd.read_sql('credits', engine, index_col='ID')
+    full_inst['TEM'] = full_inst['ID_Op'].apply(lambda x: credits.loc[x, 'TEM_W_IVA'])
+    full_inst['D_Emission'] = full_inst['ID_Op'].apply(lambda x: credits.loc[x, 'Date_Settlement'])
+    
+    # Step 2: Sorting
+    if sort_tem_emission and sort_by_tem and sort_by_emission:
+        sort = ['TEM', 'D_Emission', 'ID_Op', 'Nro_Inst']
+    elif not sort_by_emission and sort_by_emission:
+        sort = ['TEM', 'ID_Op', 'Nro_Inst']
+    elif sort_by_emission:
+        sort = ['D_Emission', 'ID_Op', 'Nro_Inst']
+    else:
+        sort = ['ID_Op', 'Nro_Inst']
+    
+    full_inst.sort_values(by=sort, ascending=asc, inplace=True)
+
+    # Step 3: Calculate Financial Values
+    full_inst['Amount_Financed'] = full_inst['Capital'] + full_inst['Interest']
+    full_inst['Current_Values'] = full_inst.apply(
+        lambda row: row['Amount_Financed'] / (1 + (tna / 365))**row[f'{date}'], axis=1
+    )
+    full_inst['Accumulated_CV'] = full_inst['Current_Values'].cumsum()
+    
+    not_inst = full_inst.loc[full_inst['Accumulated_CV'] > va]
+    full_inst = full_inst.loc[full_inst['Accumulated_CV'] <= va]
+    last_op = full_inst.iloc[-1]['ID_Op']
+    
+    if not not_inst.loc[not_inst['ID_Op'] == last_op].empty:
+        full_inst.drop(
+            index=full_inst.loc[full_inst['ID_Op'] == full_inst.iloc[-1]['ID_Op']].index.values, inplace=True
+        )
+    
+    fall_inst = full_inst.groupby(['D_Emission', 'D_Due'])[['Capital', 'Amount_Financed', 'Current_Values']].sum()
+
+    # Step 4: Generate Cash Flow
+    flow = pd.DataFrame(columns=['Amount'])
+    flow.index.name = 'Period'
+    
+    start_date = fall_inst.index.get_level_values(0).min()
+    end_date = fall_inst.index.get_level_values(1).unique().max()
+    all_dates = pd.period_range(start=start_date, end=end_date, freq='D')
+    
+    for p in all_dates:
+        flow.loc[p, 'Amount'] = 0.0
+    
+    for e, d in fall_inst.index:
+        flow.loc[e, 'Amount'] -= fall_inst.loc[(e, d), 'Capital']
+        flow.loc[d, 'Amount'] += fall_inst.loc[(e, d), 'Amount_Financed']
+    
+    print(f"TIR: {npf.irr(flow['Amount'])*30:,.2%}")
+
+    credits = credits.loc[credits.index.isin(full_inst['ID_Op'].unique())]
+    customers = pd.read_sql('customers', engine, index_col='ID')
+    customers = customers.loc[customers.index.isin(credits['ID_Client'].unique())]
+    
+    # Step 5: Save Results (Optional)
+    if save:
+        ps = pd.DataFrame(columns=['Date', 'ID_Company', 'TNA', 'Resource', 'IVA'])
+        ps.index.name = 'ID'
+        ps.loc[0] = {
+            'Date': date,
+            'ID_Company': id_company,
+            'TNA': tna,
+            'Resource': 1 if resource else 0,
+            'IVA': 1 if iva else 0
+        }
+        ps.to_sql('portfolio_sales', engine, index=False, if_exists='append')
+        id_sale = pd.read_sql('portfolio_sales', engine, index_col='ID').index.max()
+        ps.index = [id_sale]
+
+        metadata = MetaData()
+        metadata.reflect(bind=engine)
+        crts = Table('credits', metadata, autoload_with=engine)
+        insts = Table('installments', metadata, autoload_with=engine)
+        
+        with Session(engine) as session:
+            funded_credits = full_inst.groupby('ID_Op')['Nro_Inst'].min()
+            for i in funded_credits.index:
+                stmt = crts.update().where(crts.c.ID == i).values(
+                    ID_Sale=id_sale, First_Inst_Sold=funded_credits[i]
+                )
+                session.execute(stmt)
+            
+            for i in full_inst.index:
+                stmt = insts.update().where(insts.c.ID == i).values(ID_Owner=id_company)
+                session.execute(stmt)
+            session.commit()
+
+        return full_inst, credits, customers, ps
+        
+    return full_inst, credits, customers

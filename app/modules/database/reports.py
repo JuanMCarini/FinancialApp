@@ -16,6 +16,7 @@ credits = pd.read_sql('credits', engine, index_col='ID')
 credits['Date_Settlement'] = credits['Date_Settlement'].dt.to_period('D')
 
 installments = pd.read_sql('installments', engine, index_col='ID')
+installments['D_Due'] = installments['D_Due'].dt.to_period('D')
 
 collections = pd.read_sql('collection', engine, index_col='ID')
 collections['ID_Op'] = collections['ID_Inst'].apply(lambda x: installments.loc[x, 'ID_Op'])
