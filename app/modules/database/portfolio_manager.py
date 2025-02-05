@@ -1,14 +1,18 @@
-import os
+import os, sys
 import pandas as pd
 import numpy_financial as npf
 from sqlalchemy import MetaData, Table
 from sqlalchemy.orm import Session
+from PyQt6.QtWidgets import QApplication, QFileDialog
 
 
 # Import your module
 from app.modules.database.connection import engine
 from app.modules.database.customers import id_province, categorical_gender, add_customer, MaritalStatus
 from app.modules.database.credit_manager import new_credit, credits_balance
+
+
+app = QApplication(sys.argv)
 
 
 def validate_supplier_and_business_plan(id_supplier, id_bp):
@@ -465,20 +469,199 @@ def portfolio_buyer(
     return df, new_customers, pp, new_credits, installments, collections
 
 
-def portfolio_seller(date: pd.Period,
-                     tna: float,
-                     va: float,
-                     id_company: int,
-                     sort_by_tem: bool = False,
-                     sort_by_emission: bool = False,
-                     sort_tem_emission: bool = False,
-                     asc: bool = True,
-                     default: bool = False,
-                     resource: bool = False,
-                     iva: bool = False,
-                     save: bool = False):
+def translate_seller(full_inst, credits, customers, sheet_names):
     """
-    Perform portfolio analysis and optionally save the results to a database.
+    Translates column names and specific values in the provided DataFrames to Spanish.
+
+    Parameters:
+    - full_inst (pd.DataFrame): DataFrame containing installment data.
+    - credits (pd.DataFrame): DataFrame containing credit data.
+    - customers (pd.DataFrame): DataFrame containing customer data.
+    - sheet_names (list): List of sheet names to be used or updated.
+
+    Returns:
+    None (modifies DataFrames in place).
+    """
+
+    # Define sheet names for the output
+    sheet_names = ['Clientes', 'Creditos', 'Cuotas']
+
+    # Translate column names in the 'full_inst' DataFrame
+    full_inst.rename(columns={
+        'Nro_Inst': 'Nro_Cta',
+        'D_Due': 'F_Vto',
+        'Interest': 'Interés',
+        'D_Emission': 'F_Emisión',
+        'Amount_Financed': 'Monto_Financiado',
+        'Current_Values': 'Valor_Actual',
+        'Accumulated_CV': 'VA_Acumulado'
+    }, inplace=True)
+
+    # Translate column names in the 'credits' DataFrame
+    credits.rename(columns={
+        'ID_Client': 'ID_Cliente',
+        'Date_Settlement': 'Fecha_Emisión',
+        'Cap_Requested': 'Capital_Solicitado',
+        'Cap_Grant': 'Capital_Otorgado',
+        'N_Inst': 'Plazo',
+        'First_Inst_Purch': 'Prim_Cta_Comprada',
+        'TEM_W_IVA': 'TEM_C_IVA',
+        'V_Inst': 'Valor_Cta',
+        'First_Inst_Sold': 'Prim_Cta_Vendida',
+        'D_F_Due': 'Fecha_Prim_Vto',
+        'ID_Purch': 'ID_Compra',
+        'ID_Sale': 'ID_Venta',
+        'Resid_Cap': 'Capital_Residual',
+        'Resid_Int': 'Interés_Residual',
+        'Resid_IVA': 'IVA_Residual',
+        'Resid_Total': 'Total_Residual',
+        'Current_Value': 'Valor_Actual'
+    }, inplace=True)
+
+    # Translate column names in the 'customers' DataFrame
+    translations = {
+        'Last_Name': 'Apellido',
+        'Name': 'Nombre',
+        'Gender': 'Género',
+        'Date_Birth': 'Fecha de Nacimiento',
+        'Marital_Status': 'Estado Civil',
+        'Age_at_Discharge': 'Edad al Egreso',
+        'Country': 'País',
+        'ID_Province': 'ID Provincia',
+        'Locality': 'Localidad',
+        'Street': 'Calle',
+        'Nro': 'Número',
+        'CP': 'Código Postal',
+        'Feature': 'Característica',
+        'Telephone': 'Teléfono',
+        'Seniority': 'Antigüedad',
+        'Salary': 'Salario',
+        'CBU': 'CBU',
+        'Collection_Entity': 'Entidad de Cobro',
+        'Employer': 'Empleador',
+        'Dependence': 'Dependencia',
+        'CUIT_Employer': 'CUIT del Empleador',
+        'ID_Empl_Prov': 'ID Provincia del Empleador',
+        'Empl_Loc': 'Localidad del Empleador',
+        'Empl_Adress': 'Dirección del Empleador',
+        'Last_Update': 'Última Actualización'
+    }
+    customers.rename(columns=translations, inplace=True)
+
+    # Translate specific values in the 'Estado Civil' column of the 'customers' DataFrame
+    marital_status_translations = {
+        'SINGLE': 'Soltero/a',
+        'MARRIED': 'Casado/a',
+        'WIDOW': 'Viudo/a',
+        'DIVORCE': 'Divorciado/a',
+        'COHABITATION': 'Concubinato'
+    }
+    customers['Estado Civil'] = customers['Estado Civil'].map(marital_status_translations)
+
+
+def sell_to_sql(ps, full_inst, id_company, id_sale):
+    """
+    Sells a portfolio of credits and updates related tables in a SQL database.
+
+    Parameters:
+    - ps (pd.DataFrame): DataFrame containing portfolio sales data.
+    - full_inst (pd.DataFrame): DataFrame containing installment data.
+    - id_company (int): ID of the company owning the portfolio.
+    - id_sale (int): ID of the sale transaction.
+
+    Returns:
+    - id_sale (int): The ID of the sale transaction after updating the database.
+    """
+
+    # Append the portfolio sales data to the 'portfolio_sales' table in the database
+    ps.to_sql('portfolio_sales', engine, index=False, if_exists='append')
+
+    # Retrieve the maximum ID from the 'portfolio_sales' table to update the sale ID
+    id_sale = pd.read_sql('portfolio_sales', engine, index_col='ID').index.max()
+    ps.index = [id_sale]  # Update the index of the portfolio sales DataFrame
+
+    # Reflect the database schema and load the 'credits' and 'installments' tables
+    metadata = MetaData()
+    metadata.reflect(bind=engine)
+    crts = Table('credits', metadata, autoload_with=engine)
+    insts = Table('installments', metadata, autoload_with=engine)
+
+    # Use a database session to update the 'credits' and 'installments' tables
+    with Session(engine) as session:
+        # Group installment data by operation ID and find the minimum installment number
+        funded_credits = full_inst.groupby('ID_Op')['Nro_Inst'].min()
+
+        # Update the 'credits' table with the sale ID and first installment sold
+        for i in funded_credits.index:
+            stmt = crts.update().where(crts.c.ID == i).values(
+                ID_Sale=id_sale, First_Inst_Sold=funded_credits[i]
+            )
+            session.execute(stmt)
+
+        # Update the 'installments' table with the company ID as the new owner
+        for i in full_inst.index:
+            stmt = insts.update().where(insts.c.ID == i).values(ID_Owner=id_company)
+            session.execute(stmt)
+
+        # Commit the changes to the database
+        session.commit()
+
+    # Return the updated sale ID
+    return id_sale
+
+
+def export_sell(customers, sheet_names, full_inst, credits, date, id_sale):
+    """
+    Exports customer, credit, and installment data to an Excel file in a selected folder.
+
+    Parameters:
+    - customers (pd.DataFrame): DataFrame containing customer data.
+    - sheet_names (list): List of sheet names for the Excel file.
+    - full_inst (pd.DataFrame): DataFrame containing installment data.
+    - credits (pd.DataFrame): DataFrame containing credit data.
+    - date (str): Date of the sale transaction, used in the file name.
+    - id_sale (int): ID of the sale transaction, used in the file name.
+
+    Returns:
+    None (exports data to an Excel file in the selected folder).
+    """
+
+    # Open a folder selection dialog for the user to choose the export location
+    folder_selected = QFileDialog.getExistingDirectory(None, "Select a Folder")
+    
+    # Raise an error if no folder is selected
+    if folder_selected == '':
+        raise ValueError('No folder selected.')
+
+    # Create an Excel file in the selected folder with a name based on the sale ID and date
+    with pd.ExcelWriter(f'{folder_selected}/Venta de Cartera Nro. {id_sale} - {date}.xlsx') as writer:
+        # Export customer data to the first sheet
+        customers.to_excel(writer, sheet_name=sheet_names[0], index=True)
+
+        # Export credit data to the second sheet
+        credits.to_excel(writer, sheet_name=sheet_names[1], index=True)
+        
+        # Export installment data to the third sheet
+        full_inst.to_excel(writer, sheet_name=sheet_names[2], index=True)
+
+
+def portfolio_seller(
+        date: pd.Period,
+        tna: float,
+        va: float,
+        id_company: int,
+        sort_by_tem: bool = False,
+        sort_by_emission: bool = False,
+        sort_tem_emission: bool = False,
+        asc: bool = True,
+        default: bool = False,
+        resource: bool = False,
+        iva: bool = False,
+        save: bool = False,
+        es: bool = False,
+        export: bool = False):
+    """
+    Perform portfolio analysis for salle, filter installments, calculate financial values, and optionally save results.
 
     Parameters:
         date (pd.Period): Reference date for filtering and calculations.
@@ -493,15 +676,19 @@ def portfolio_seller(date: pd.Period,
         resource (bool): Indicates if resource flag should be set.
         iva (bool): If True, exclude IVA from calculations.
         save (bool): If True, save the results to the database.
+        es (bool): If True, translate field names to Spanish.
+        export (bool): If True, export results to an Excel file.
 
     Returns:
-        tuple: Filtered installments (`full_inst`), grouped installments (`fall_inst`), and cash flow (`flow`).
+        tuple: Filtered installments (`full_inst`), credits (`credits`), customers (`customers`), and portfolio sales (`ps`).
     """
-    # Step 1: Filter Installments
+
+    # Step 1: Filter Installments based on balance, default status, and due date
     installments = pd.read_sql('installments', engine, index_col='ID')
     installments['D_Due'] = installments['D_Due'].dt.to_period('D')
     balance = credits_balance()
     balance['D_Due'] = balance['D_Due'].dt.to_period('D')
+
     if default:
         full_inst = installments.loc[(balance['Total'] == installments['Total'])].copy()
     else:
@@ -509,22 +696,25 @@ def portfolio_seller(date: pd.Period,
             (balance['Total'] == installments['Total']) & (installments['D_Due'] >= date)
         ].copy()
     
+    # Step 2: Adjust for IVA if applicable
     if iva:
         full_inst['IVA'] = 0.0
         full_inst['Total'] = full_inst['Capital'] + full_inst['Interest']
     
+    # Step 3: Filter by owner ID and create time difference column
     full_inst = installments.loc[
         (full_inst['ID_Owner'] == 1) &
         (balance['Total'] == installments['Total']) &
         (installments['D_Due'] >= date)
     ].copy()
-    
+
+    # Step 4: Retrieve credit details and assign TEM and emission date    
     full_inst[f'{date}'] = full_inst['D_Due'].apply(lambda x: (x - date).n)
     credits = pd.read_sql('credits', engine, index_col='ID')
     full_inst['TEM'] = full_inst['ID_Op'].apply(lambda x: credits.loc[x, 'TEM_W_IVA'])
     full_inst['D_Emission'] = full_inst['ID_Op'].apply(lambda x: credits.loc[x, 'Date_Settlement'])
     
-    # Step 2: Sorting
+    # Step 5: Sort installments based on provided criteria
     if sort_tem_emission and sort_by_tem and sort_by_emission:
         sort = ['TEM', 'D_Emission', 'ID_Op', 'Nro_Inst']
     elif not sort_by_emission and sort_by_emission:
@@ -536,13 +726,14 @@ def portfolio_seller(date: pd.Period,
     
     full_inst.sort_values(by=sort, ascending=asc, inplace=True)
 
-    # Step 3: Calculate Financial Values
+    # Step 6: Compute financial values (Present Value, Cumulative Value)
     full_inst['Amount_Financed'] = full_inst['Capital'] + full_inst['Interest']
     full_inst['Current_Values'] = full_inst.apply(
         lambda row: row['Amount_Financed'] / (1 + (tna / 365))**row[f'{date}'], axis=1
     )
     full_inst['Accumulated_CV'] = full_inst['Current_Values'].cumsum()
     
+    # Step 7: Select viable installments based on available funds (va)
     not_inst = full_inst.loc[full_inst['Accumulated_CV'] > va]
     full_inst = full_inst.loc[full_inst['Accumulated_CV'] <= va]
     last_op = full_inst.iloc[-1]['ID_Op']
@@ -554,7 +745,7 @@ def portfolio_seller(date: pd.Period,
     
     fall_inst = full_inst.groupby(['D_Emission', 'D_Due'])[['Capital', 'Amount_Financed', 'Current_Values']].sum()
 
-    # Step 4: Generate Cash Flow
+    # Step 8: Generate cash flow and calculate IRR
     flow = pd.DataFrame(columns=['Amount'])
     flow.index.name = 'Period'
     
@@ -571,43 +762,45 @@ def portfolio_seller(date: pd.Period,
     
     print(f"TIR: {npf.irr(flow['Amount'])*30:,.2%}")
 
+    # Step 9: Retrieve credits and customers information
     credits = credits.loc[credits.index.isin(full_inst['ID_Op'].unique())]
     customers = pd.read_sql('customers', engine, index_col='ID')
     customers = customers.loc[customers.index.isin(credits['ID_Client'].unique())]
     
-    # Step 5: Save Results (Optional)
+    # Step 10: Create portfolio sales DataFrame
+    ps = pd.DataFrame(columns=['Date', 'ID_Company', 'TNA', 'Resource', 'IVA'])
+    ps.index.name = 'ID'
+    ps.loc[0] = {
+        'Date': date,
+        'ID_Company': id_company,
+        'TNA': tna,
+        'Resource': 1 if resource else 0,
+        'IVA': 1 if iva else 0
+    }
+    
+    # Step 11: Save results to database if required
     if save:
-        ps = pd.DataFrame(columns=['Date', 'ID_Company', 'TNA', 'Resource', 'IVA'])
-        ps.index.name = 'ID'
-        ps.loc[0] = {
-            'Date': date,
-            'ID_Company': id_company,
-            'TNA': tna,
-            'Resource': 1 if resource else 0,
-            'IVA': 1 if iva else 0
-        }
-        ps.to_sql('portfolio_sales', engine, index=False, if_exists='append')
-        id_sale = pd.read_sql('portfolio_sales', engine, index_col='ID').index.max()
-        ps.index = [id_sale]
-
-        metadata = MetaData()
-        metadata.reflect(bind=engine)
-        crts = Table('credits', metadata, autoload_with=engine)
-        insts = Table('installments', metadata, autoload_with=engine)
+        id_sale = sell_to_sql(ps, full_inst, id_company)
+    else:
+        id_sale = 'XXXX'    
         
-        with Session(engine) as session:
-            funded_credits = full_inst.groupby('ID_Op')['Nro_Inst'].min()
-            for i in funded_credits.index:
-                stmt = crts.update().where(crts.c.ID == i).values(
-                    ID_Sale=id_sale, First_Inst_Sold=funded_credits[i]
-                )
-                session.execute(stmt)
-            
-            for i in full_inst.index:
-                stmt = insts.update().where(insts.c.ID == i).values(ID_Owner=id_company)
-                session.execute(stmt)
-            session.commit()
+    # Step 12: Calculate residual values and update credits DataFrame
+    credits['Resid_Cap']     = full_inst.groupby('ID_Op')['Capital'].sum()
+    credits['Resid_Int']     = full_inst.groupby('ID_Op')['Interest'].sum()
+    credits['Resid_IVA']     = full_inst.groupby('ID_Op')['IVA'].sum()
+    credits['Resid_Total']   = full_inst.groupby('ID_Op')['Total'].sum()
+    credits['Current_Value'] = full_inst.groupby('ID_Op')['Current_Values'].sum().round(2)
+    for c in ['First_Inst_Purch', 'First_Inst_Sold', 'ID_Purch']:
+        credits[c] = credits[c].astype(int)
+    credits['First_Inst_Sold'] = full_inst.groupby('ID_Op')['Nro_Inst'].min()    
 
-        return full_inst, credits, customers, ps
-        
-    return full_inst, credits, customers
+    # Step 13: Define sheet names for export
+    sheet_names = ['Customers', 'Credits', 'Installments']
+
+    # Step 14: Translate field names to Spanish if required
+    if es: translate_seller(full_inst, credits, customers, sheet_names)
+    
+    # Step 15: Export results to Excel if required        
+    if export: export_sell(customers, sheet_names, full_inst, credits, date, id_sale)
+
+    return full_inst, credits, customers, ps

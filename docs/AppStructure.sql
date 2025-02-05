@@ -129,3 +129,9 @@ CREATE TABLE settings (
     Detail VARCHAR(100) NOT NULL,
     Type ENUM('T', 'I', 'F', 'D') NOT NULL DEFAULT 'T',
     Value TEXT NOT NULL);
+
+CREATE TABLE portfolio_sales_generated (
+    ID INT PRIMARY KEY NOT NULL AUTO_INCREMENT,
+    TNA DECIMAL(10,8) NOT NULL,
+    
+)

@@ -14,11 +14,13 @@ FinancialApp/
 │       ├── __init__.py
 │       └── database
 │           ├── __init__.py
+│           ├── collection.py
 │           ├── companies.py
 │           ├── connection.py
 │           ├── credit_manager.py
 │           ├── customers.py
-│           ├── folder_manager.py
+│           ├── portfolio_manager.py
+│           ├── reports.py
 │           └── structur_databases.py
 ├── docs/
 │   ├── requirements.txt
@@ -95,6 +97,7 @@ The ```structur_databases.py```* module defines the SQLAlchemy ORM classes that 
 2. **Classes:**
 
     * ```Province```: Represents a province in Argentina and is used in the Customer table to link each customer to their province.
+    * ```MaritalStatus```: Represents the marital status of a customer (e.g., Single, Married, Divorced) and is used to assess financial stability or eligibility for certain services or products.
     * ```Customer```: Represents a customer in the system. This table contains various fields such as:
         * ```CUIL```: A unique identifier for the customer.
         * ```DNI```: The customer's national identity number.
@@ -109,11 +112,13 @@ The ```structur_databases.py```* module defines the SQLAlchemy ORM classes that 
         The Customer table has two relationships with the Province table:
         * One for the customer's province (```ID_Province```).
         * Another for the employer's province (```ID_Empl_Prov```).
-    * Company: Represents a company in the system. This table includes:
+    * ```Company```: Represents a company in the system. This table includes:
         * ```CUIT```: The company's tax identification number.
         * ```Advance```: The company's advance amount (e.g., payments or debt management).
+    * ```Installments```: Represents the breakdown of payments a customer must make.
+    * ```Collection```: Represents the collection or recovery process for overdue accounts.
 
-### Code Walkthrough:
+#### Code Walkthrough:
 
 1. **Province Class:**
     * This class represents the provinces in Argentina, with the following attributes:
@@ -132,7 +137,17 @@ The ```structur_databases.py```* module defines the SQLAlchemy ORM classes that 
             return f"<Province(ID={self.ID}, Name='{self.Name}')>"
     ```
 
-2. **Customer Class:**
+2. *Marital Status Class:*
+
+    * The MaritalStatus enum represents the various marital statuses that a customer can have, ensuring consistency across the database and application.
+    * The possible marital statuses are:
+        * SINGLE: The individual is not married.
+        * COHABITATION: The individual is living with a partner but not married.
+        * MARRIED: The individual is legally married.
+        * WIDOW: The individual has lost their spouse through death.
+        * DIVORCE: The individual has legally separated from their spouse.
+
+3. **Customer Class:**
 
     * This is the core class for representing customer data, with the following key features:
         * ```CUIL``` and ```DNI```: Unique identifiers for the customer.
@@ -182,7 +197,7 @@ The ```structur_databases.py```* module defines the SQLAlchemy ORM classes that 
         employer_province = relationship("Province", foreign_keys=[ID_Empl_Prov])
         ```
 
-3. **Company Class:**
+4. **Company Class:**
     
     The Company class represents a company in the system. It includes:
     * CUIT: The tax identification number of the company.
@@ -201,6 +216,80 @@ The ```structur_databases.py```* module defines the SQLAlchemy ORM classes that 
         def __repr__(self):
             return f"<Company(ID={self.ID}, Social_Reason='{self.Social_Reason}', CUIT={self.CUIT}, Advance={self.Advance})>"
     ```
+
+5. **Installments Class:**
+
+    * The Installments class represents the payment installments for customers, with details about each installment such as its amount, due date, and related credit or company.
+    * Attributes include:
+        * id: A unique identifier for each installment.
+        * id_op: A foreign key that links the installment to a specific credit (credits.ID), ensuring the installment is tied to a particular credit operation.
+        * nro_inst: The installment number for tracking.
+        * d_due: The due date of the installment, stored as a DateTime.
+        * capital: The principal amount of the installment.
+        * interest: The interest amount associated with the installment.
+        * iva: The value-added tax (VAT) on the installment.
+        * total: The total amount due (capital + interest + IVA).
+        * id_owner: A foreign key linking the installment to a company (companies.ID).
+    * A relationship to the Collection table is defined (collections), representing the possible collections associated with this installment.
+
+    ```python
+    class Installments(Base):
+    __tablename__ = 'installments'
+
+    id = Column("ID", Integer, primary_key=True, autoincrement=True)
+    id_op = Column("ID_Op", Integer, ForeignKey("credits.ID", onupdate="CASCADE"), nullable=False)
+    nro_inst = Column("Nro_Inst", Integer, nullable=False)
+    d_due = Column("D_Due", DateTime, nullable=False)
+    capital = Column("Capital", DECIMAL(15, 2), nullable=False)
+    interest = Column("Interest", DECIMAL(15, 2), nullable=False)
+    iva = Column("IVA", DECIMAL(15, 2), nullable=False)
+    total = Column("Total", DECIMAL(15, 2), nullable=False)
+    id_owner = Column("ID_Owner", Integer, ForeignKey("companies.ID", onupdate="CASCADE"))
+    
+    # Relationship with Collection (optional)
+    collections = relationship("Collection", back_populates="installment")
+    ```
+
+6. **Collection Class:**
+
+    * The Collection class represents the process of collecting payments for overdue installments.
+    * Attributes include:
+        * id: A unique identifier for each collection record.
+        * id_inst: A foreign key that links the collection record to a specific installment (installments.ID), ensuring that collections are associated with the correct installment.
+        * d_emission: The emission date of the collection, indicating when the collection attempt was made.
+        * type_collection: The type of collection operation, represented as an Enum with various types (e.g., COMUN, ANTICIPADA, PARCIAL).
+        * capital, interest, iva, total: These fields represent the amounts for the capital, interest, VAT, and total collected during the collection process.
+    * A relationship to the Installments table is defined (installment), representing the installment associated with the collection.
+
+    ```python
+    class Collection(Base):
+    __tablename__ = 'collection'
+
+    id = Column("ID", Integer, primary_key=True, autoincrement=True)
+    id_inst = Column("ID_Inst", Integer, ForeignKey("installments.ID", onupdate="CASCADE"))
+    d_emission = Column("D_Emission", DateTime, nullable=False)
+    type_collection = Column("Type_Collection", Enum('COMUN', 'ANTICIPADA', 'PARCIAL', 'REDONDEO', 
+                                                     'PENALTY', 'CAN. ANT.', 'BON. CAN. ANT.', 
+                                                     'REVERSA', 'NO COMPRADA', 'RECURSO'), nullable=True)
+    capital = Column("Capital", DECIMAL(15, 2), nullable=False)
+    interest = Column("Interest", DECIMAL(15, 2), nullable=False)
+    iva = Column("IVA", DECIMAL(15, 2), nullable=False)
+    total = Column("Total", DECIMAL(15, 2), nullable=False)
+
+    # Relationship with Installments
+    installment = relationship("Installments", back_populates="collections")
+    ```
+
+    #### Relationships:
+    
+    * The Installments table has a foreign key (id_op) that links to the credits table, and another foreign key (id_owner) that links to the companies table. It also defines a relationship with the Collection table via collections.
+    * The Collection table has a foreign key (id_inst) that links back to the Installments table, establishing a direct relationship between a collection and its corresponding installment.
+    
+    #### Enum type_collection:
+    
+    The type_collection field is defined using an Enum that specifies different collection types. These types represent various scenarios or reasons for the collection action, such as a standard collection (COMUN), an early payment (ANTICIPADA), partial payments (PARCIAL), and several others.
+
+    This structure provides a flexible and clear design to handle both the installment and collection processes in your system. Let me know if you need further adjustments or explanations!
 
 #### **Key Features:**
 
@@ -540,6 +629,7 @@ The ```collection.py``` module is a comprehensive utility for managing financial
         save=True
     )
     ```
+
 3. **Reversing a Collection:**
     ```python
     reversed_collection = reverse(
@@ -612,6 +702,38 @@ The ```portfolio_manager.py``` module is designed to handle the acquisition, man
             5. Generating new credits, installments, and collections.
         * Returns all processed data, including updated customer information, portfolio purchases, credits, installments, and collections.
 
+    * **portafolio_seller**:
+
+        * The portfolio_seller function performs a comprehensive analysis of a portfolio of credits and installments for a salle. It filters, sorts, and calculates financial metrics for installments, and optionally saves the results to a database and/or exports them to an Excel file. It also supports translating field names to Spanish and generating cash flow analysis.
+
+        * Key Features:
+            * Filtering: Filters installments based on due date, default status, and ownership.
+            * Sorting: Sorts installments based on user-defined criteria (e.g., TEM, emission date).
+            * Financial Calculations: Computes present value, cumulative value, and internal rate of return (IRR).
+            * Database Integration: Saves results to a SQL database if requested.
+            * Translation: Translates field names to Spanish if needed.
+            * Export: Exports results to an Excel file for further analysis or reporting.
+
+        * Inputs:
+            * date: Reference date for filtering and calculations.
+            * tna: Nominal annual interest rate for financial calculations.
+            * va: Available funds for financing.
+            * id_company: ID of the company owning the portfolio.
+            * Sorting and filtering flags (sort_by_tem, sort_by_emission, default, etc.).
+            * Options for saving, translating, and exporting results.
+
+        * Outputs:
+            * full_inst: Filtered and processed installment data.
+            * credits: Credit data associated with the filtered installments.
+            * customers: Customer data associated with the credits.
+            * ps: Portfolio sales data for database storage.
+
+        * Dependencies:
+            
+            * Libraries: pandas, sqlalchemy, numpy_financial, PyQt5 (for folder selection).
+            * Database: Requires a SQL database with tables for installments, credits, customers, and portfolio_sales.
+            * Helper Functions: credits_balance() for balance calculations, sell_to_sql() to update the SQL database, translate_seller() to translate the tables to export, export_sell() to export customer, credit, and installment data to an Excel file. It allows the user to select a folder for saving the file and generates a structured Excel workbook.
+
 #### **Key Functionalities:**
 
 1. Supplier and Business Plan Validation:
@@ -621,13 +743,16 @@ The ```portfolio_manager.py``` module is designed to handle the acquisition, man
     * Normalizes and structures data for consistent database integration.
 3. Customer Record Management:
     * Handles the addition and updating of customer records, ensuring accurate and up-to-date information.
-4. Portfolio Purchase Integration:
-    * Records portfolio purchases in the database with detailed information, such as financial terms and conditions.
-5. Credit and Installment Generation:
+4. Credit and Installment Generation:
     * Generates new credits and their associated installments based on portfolio data.
     * Assigns unique IDs and calculates financial attributes like interest rates and installment values.
-6. Collection Processing:
+5. Collection Processing:
     * Handles collections related to purchased portfolios, including adjustments for VAT and installment conditions.
+6. Portfolio Purchase Integration:
+    * Records portfolio purchases in the database with detailed information, such as financial terms and conditions.
+7. Portfolio Seller Integration:
+    * Records portfolio sells in the database with detailed information, such as financial terms and conditions.
+
 
 #### **Workflow Example:**
 
@@ -663,6 +788,47 @@ The ```portfolio_manager.py``` module is designed to handle the acquisition, man
     ```
 
 This module is a critical component of FinancialApp, enabling seamless integration and processing of credit portfolios, while ensuring accurate and efficient management of related customer and financial data.
+
+### Module Description: ```reports.py```
+
+The reports.py module generates detailed financial reports for the credit portfolio. It extracts data from multiple tables within the database, processes key financial metrics, and provides structured outputs for analysis. This module is essential for tracking credit performance, overdue amounts, and collection history.
+
+#### Key Functions
+
+1. portfolio_inventory(date: pd.Period, save: bool, es: bool) -> pd.DataFrame
+    * Generates a detailed inventory of the credit portfolio for a given date.
+    * Merges customer, company, and credit data to provide a comprehensive overview.
+    * Calculates overdue amounts, collected payments, and outstanding balances.
+    * Optionally saves the report as an Excel file.
+    * Supports Spanish column names (es=True).
+
+2. fall_inst(emission_from: pd.Period, emission_until: pd.Period, save: bool, es: bool) -> pd.DataFrame
+    * Summarizes outstanding installments grouped by due date and company.
+    * Filters credits based on their settlement date.
+    * Aggregates overdue amounts and provides structured data for financial analysis.
+    * Optionally saves the report as an Excel file.
+    * Supports Spanish column names (es=True).
+
+#### Database Dependencies
+
+* Extracts data from the following tables:
+    * portfolio_purchases
+    * customers
+    * companies
+    * business_plan
+    * credits
+    * installments
+    * collection
+
+* Uses the credits_balance function from credit_manager.py to calculate outstanding balances.
+
+#### Output
+* Returns structured Pandas DataFrames with financial insights.
+* Provides detailed analytics on overdue amounts, last collection dates, and default periods.
+* Supports exporting data to Excel for further reporting and analysis.
+
+This module is crucial for monitoring credit performance and ensuring effective portfolio management.
+
 
 ### Future Features
 

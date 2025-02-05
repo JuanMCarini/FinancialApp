@@ -29,6 +29,9 @@ pure_eval==0.2.3
 pycparser==2.22
 Pygments==2.18.0
 PyMySQL==1.1.1
+PyQt6==6.8.0
+PyQt6-Qt6==6.8.1
+PyQt6_sip==13.10.0
 python-dateutil==2.9.0.post0
 pytz==2024.2
 pywin32==308
