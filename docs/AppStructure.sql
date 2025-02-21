@@ -132,6 +132,4 @@ CREATE TABLE settings (
 
 CREATE TABLE portfolio_sales_generated (
     ID INT PRIMARY KEY NOT NULL AUTO_INCREMENT,
-    TNA DECIMAL(10,8) NOT NULL,
-    
-)
+    TNA DECIMAL(10,8) NOT NULL);
