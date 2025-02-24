@@ -2,8 +2,8 @@ import os
 from unittest.mock import patch
 import pandas as pd
 
-# Change working directory to the project root
-os.chdir(r"c:\Users\juanm_8qa8lav\Documents\Proyectos_Personales\FinancialApp")
+# # Change working directory to the project root
+# os.chdir(r"c:\Users\juanm_8qa8lav\Documents\Proyectos_Personales\FinancialApp")
 
 # Lista de entradas para simular
 inputs = ['Empresa dueña de la cartera.',

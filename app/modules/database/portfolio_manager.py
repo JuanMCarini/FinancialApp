@@ -15,378 +15,402 @@ from app.modules.database.credit_manager import new_credit, credits_balance
 app = QApplication(sys.argv)
 
 
-def validate_supplier_and_business_plan(id_supplier, id_bp):
+def validate_supplier_and_business_plan(id_supplier: int, id_bp: int):
     """
     Validates if a given supplier ID exists in the 'companies' table and 
     checks if a given business plan ID is associated with the supplier.
     
     Parameters:
-        engine: SQLAlchemy Engine
-            A database connection engine.
-        id_supplier: int or str
-            The ID of the supplier to validate.
-        id_bp: int or str
-            The ID of the business plan to validate.
+        id_supplier (int): The ID of the supplier to validate.
+        id_bp (int): The ID of the business plan to validate.
     
     Raises:
-        ValueError: If the supplier ID does not exist or if the business plan ID is not associated 
-                    with the given supplier.
+        ValueError: If the supplier ID does not exist or if the business plan ID 
+                    is not associated with the given supplier.
     """
-    # Load the 'companies' table with the 'ID' column as the index
-    companies = pd.read_sql('companies', engine, index_col='ID')
 
-    # Validate if the supplier ID exists
-    if id_supplier not in companies.index:
-        raise ValueError(f"{id_supplier} is not a valid company value.")
-    
-    # Load the 'business_plan' table with the 'ID' column as the index
-    bp = pd.read_sql('business_plan', engine, index_col='ID')
+    # ✅ Step 1: Validate supplier existence using an efficient SQL query
+    supplier_count = pd.read_sql(f"SELECT COUNT(*) FROM companies WHERE ID = {id_supplier}", engine).iloc[0, 0]
+    if supplier_count == 0:
+        raise ValueError(f"❌ Supplier ID {id_supplier} does not exist in the 'companies' table.")
 
-    # Filter business plans for those associated with the supplier company
-    supplier_bp = bp.loc[bp['ID_Company'] == id_supplier]
+    # ✅ Step 2: Fetch only relevant business plans for this supplier
+    supplier_bp = pd.read_sql(f"SELECT ID FROM business_plan WHERE ID_Company = {id_supplier}", engine)
 
-    # Validate if the business plan ID exists in the filtered plans
-    if id_bp not in supplier_bp.index:
+    # ✅ Step 3: Validate if the business plan ID is associated with this supplier
+    if id_bp not in supplier_bp["ID"].values:
         raise ValueError(
-            f"{id_bp} is not a business plan associated with {companies.loc[id_supplier]}.\n"
-            f"The actual business plans are:\n{supplier_bp}"
+            f"❌ Business plan ID {id_bp} is not associated with supplier ID {id_supplier}.\n"
+            f"✔ Available business plans for this supplier: {supplier_bp['ID'].tolist()}"
         )
+    
+    print(f"✅ Supplier {id_supplier} and business plan {id_bp} are valid and correctly associated.")
 
 
-def load_file(path):
+
+import os
+import pandas as pd
+
+def load_file(path: str) -> pd.DataFrame:
     """
     Loads a file into a pandas DataFrame, supporting CSV and Excel files.
 
     Parameters:
-        path: str
-            The file path to load.
+        path (str): The file path to load.
 
     Returns:
-        DataFrame: The loaded data.
+        pd.DataFrame: The loaded data.
 
     Raises:
         FileNotFoundError: If the file does not exist at the specified path.
         ValueError: If the file type is unsupported.
     """
-    # Ensure the file path exists
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"The file '{path}' does not exist.")
 
-    # Get the file extension to determine how to read the file
+    # ✅ Step 1: Ensure the file exists
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"❌ The file '{path}' does not exist.")
+
+    # ✅ Step 2: Extract the file extension
     _, extension = os.path.splitext(path)
     extension = extension.lower()
 
-    # Read the file based on the extension (CSV or Excel)
-    if extension == '.csv':
-        # Read CSV file assuming semicolon as separator (adjust as needed)
-        df = pd.read_csv(path, sep=";")
-    elif extension == '.xlsx':
-        # Read Excel file
-        df = pd.read_excel(path)
+    # ✅ Step 3: Load file based on its type
+    match extension:
+        case ".csv":
+            df = pd.read_csv(path, sep=None, engine="python")  # Auto-detect delimiter
+        case ".xls" | ".xlsx":
+            df = pd.read_excel(path)
+        case _:
+            raise ValueError(f"❌ Unsupported file format '{extension}'. Please use CSV or Excel.")
 
-    df.set_index('ID', inplace=True)
+    # ✅ Step 4: Ensure 'ID' column exists before setting it as an index
+    if "ID" in df.columns:
+        df.set_index("ID", inplace=True)
+    else:
+        print("⚠️ Warning: The 'ID' column was not found. The index remains unchanged.")
 
     return df
 
 
-def read_data(path, model: bool = False, id_supplier = None, iqua: bool = False, cfl: bool= False):
-    # Check for conflicting flags
-    if (model and iqua) or (model and cfl) or (iqua and cfl):
-        raise ValueError("Cannot set more than one flag (model, iqua, and cfl) to True at the same time.")
+def _process_credit_row(row, first_inst):
+    """
+    Processes a single credit row from the dataset.
+
+    Parameters:
+        row (pd.Series): Row data.
+        first_inst (pd.Series): First installment per credit.
+
+    Returns:
+        dict: Processed credit information.
+    """
+    return {
+        'CUIL': row['CUIL del Cliente'],
+        'DNI': row['DNI'],
+        'Last_Name': row['Last_Name'].title(),
+        'Name': row['Name'].title(),
+        'Date_Birth': row['Fecha y Lugar de Nacimiento'],
+        'Gender': 'O',
+        'Marital_Status': MaritalStatus.SINGLE,
+        'Age_at_Discharge': None,
+        'Country': None,
+        'Province': row['Provincia'],
+        'Locality': row['Locality'],
+        'Street': row['Street'],
+        'Nro': None,
+        'CP': row['Codigo Postal'],
+        'Feature': None,
+        'Email': row['Mail'],
+        'Telephone': row['Telefono'],
+        'Seniority': None,
+        'Salary': row['Actividad Laboral (Ingreso mensual)'],
+        'CBU': None,
+        'Collection_Entity': row['Decreto 1412'],
+        'Employer': None,
+        'Dependence': None,
+        'CUIT_Employer': None,
+        'Empl_Prov': None,
+        'Empl_Loc': None,
+        'Empl_Adress': None,
+        'Date_Settlement': row['Fecha de Liquidacion '],
+        'Cap_Requested': row['Capital'],
+        'Cap_Grant': row['Capital'],
+        'N_Inst': row['n.º de Cuota'],
+        'First_Inst_Purch': first_inst.get(row.name, None),
+        'TEM_W_IVA': None,
+        'V_Inst': row['Monto de cuota'],
+        'D_F_Due': row['Fecha de Vencimiento']
+    }
     
-    # Check for missing id_supplier when none of model, iqua, or cfl is True
-    elif not (model or iqua or cfl) and not id_supplier:
+def _process_supplier_2(path: str) -> pd.DataFrame:
+    """
+    Reads and processes data for supplier ID 2.
+
+    Parameters:
+        path (str): Path to the Excel file.
+
+    Returns:
+        pd.DataFrame: Processed supplier data.
+    """
+    columns = [
+        'CUIL', 'DNI', 'Last_Name', 'Name', 'Date_Birth', 'Gender', 'Marital_Status', 'Age_at_Discharge',
+        'Country', 'Province', 'Locality', 'Street', 'Nro', 'CP', 'Feature', 'Email', 'Telephone',
+        'Seniority', 'Salary', 'CBU', 'Collection_Entity', 'Employer', 'Dependence', 'CUIT_Employer',
+        'Empl_Prov', 'Empl_Loc', 'Empl_Adress', 'Date_Settlement', 'Cap_Requested', 'Cap_Grant',
+        'N_Inst', 'First_Inst_Purch', 'TEM_W_IVA', 'V_Inst', 'D_F_Due'
+    ]
+    
+    df = pd.DataFrame(columns=columns)
+    df.index.name = 'ID'
+
+    try:
+        first_inst = pd.read_excel(path, sheet_name='Detalle').groupby('id_credito')['nro_cuota'].min()
+        credits = pd.read_excel(path, sheet_name='Creditos', index_col='Numero credito original')
+
+        # Standardize CUIL format
+        if credits['CUIL del Cliente'].dtype != 'int64':
+            credits['CUIL del Cliente'] = credits['CUIL del Cliente'].str.replace('-', '').astype(int)
+
+        # Extract DNI
+        credits['DNI'] = credits['CUIL del Cliente'] % 10**9 // 10
+
+        # Split full name and address
+        credits[['Last_Name', 'Name']] = credits['Apellido y nombre del cliente'].str.split(", ", expand=True)
+        credits[['Street', 'Locality']] = credits['Domicilio'].str.split(' - ', expand=True)
+            
+        # Process each record
+        df = credits.apply(lambda row: _process_credit_row(row, first_inst), axis=1, result_type='expand')
+
+    except Exception as e:
+        print(f"❌ Error reading supplier data: {e}")
+    
+    return df
+
+def read_data(path: str, model: bool = False, id_supplier=None, iqua: bool = False, cfl: bool = False):
+    """
+    Reads and processes portfolio data based on the specified mode.
+
+    Parameters:
+        path (str): Path to the data file (CSV or Excel).
+        model (bool): Whether to process data as a 'model' file.
+        id_supplier (int, optional): Supplier ID for certain processing cases.
+        iqua (bool): Flag for a specific type of data processing.
+        cfl (bool): Another optional flag for data processing.
+
+    Returns:
+        pd.DataFrame: Processed portfolio data.
+    """
+
+    # ✅ Step 1: Validate the mode selection (only one flag can be True)
+    active_flags = sum([model, iqua, cfl])
+    if active_flags > 1:
+        raise ValueError("Cannot set more than one flag (model, iqua, and cfl) to True at the same time.")
+    elif active_flags == 0 and not id_supplier:
         raise ValueError("id_supplier must be provided if none of the flags (model, iqua, cfl) are set.")
 
-    # Load data based on the flags
+    # ✅ Step 2: Process data based on the selected mode
     if model:
         df = load_file(path)
-        for c in ['Last_Name', 'Name']:
-            df[c] = df[c].str.title()
 
+        # Normalize text columns
+        df[['Last_Name', 'Name']] = df[['Last_Name', 'Name']].apply(lambda col: col.str.title())
+
+        # Standardize Marital Status values
         marital_status_map = {
             'SINGLE': MaritalStatus.SINGLE,
             'COHABITATION': MaritalStatus.COHABITATION,
             'MARRIED': MaritalStatus.MARRIED,
             'WIDOW': MaritalStatus.WIDOW,
             'DIVORCE': MaritalStatus.DIVORCE
-            }
-        # Now replace the values in the 'Marital_Status' column
+        }
         df['Marital_Status'] = df['Marital_Status'].replace(marital_status_map)
 
-    elif iqua:
-        pass  # Implement loading logic for iqua if needed
-    elif cfl:
-        pass  # Implement loading logic for cfl if needed
-    else:
+    elif iqua or cfl:
+        pass  # Placeholder for future implementations
+
+    else:  # Default processing based on id_supplier
         if id_supplier == 2:
-            # Read data from the provided Excel file into a DataFrame
-            df = pd.DataFrame(columns=[
-                'CUIL', 'DNI', 'Last_Name', 'Name', 'Date_Birth', 'Gender', 'Marital_Status', 'Age_at_Discharge',
-                'Country', 'Province', 'Locality', 'Street', 'Nro', 'CP', 'Feature', 'Email',
-                'Telephone', 'Seniority', 'Salary', 'CBU', 'Collection_Entity',
-                'Employer', 'Dependence', 'CUIT_Employer', 'Empl_Prov', 'Empl_Loc',
-                'Empl_Adress', 'Date_Settlement', 'Cap_Requested', 'Cap_Grant',
-                'N_Inst', 'First_Inst_Purch', 'TEM_W_IVA', 'V_Inst', 'D_F_Due'
-            ])
-            df.index.name = 'ID'
+            df = _process_supplier_2(path)
+        else:
+            raise ValueError(f"Unsupported supplier ID: {id_supplier}")
 
-            first_inst = pd.read_excel(path, sheet_name='Detalle')
-            first_inst = first_inst.groupby('id_credito')['nro_cuota'].min()
-
-            credits = pd.read_excel(path, sheet_name='Creditos', index_col='Numero credito original')
-            if credits['CUIL del Cliente'].dtype != 'int64':
-                credits['CUIL del Cliente'] = credits['CUIL del Cliente'].str.replace('-', '').astype(int)
-            credits['DNI'] = credits['CUIL del Cliente'] % 10 ** 9 // 10
-            credits['Apellido y nombre del cliente'] = credits['Apellido y nombre del cliente'].str.split(", ")
-            credits['Domicilio'] = credits['Domicilio'].str.split(' - ')
-            for i in credits.index:
-                df.loc[i] = {
-                    'CUIL': credits.loc[i, 'CUIL del Cliente'],
-                    'DNI': credits.loc[i, 'DNI'],
-                    'Last_Name': credits.loc[i, 'Apellido y nombre del cliente'][0].title(),
-                    'Name': credits.loc[i, 'Apellido y nombre del cliente'][1].title(),
-                    'Date_Birth': credits.loc[i, 'Fecha y Lugar de Nacimiento'],
-                    'Gender': 'O',
-                    'Marital_Status': MaritalStatus.SINGLE,
-                    'Age_at_Discharge': None,
-                    'Province': credits.loc[i, 'Provincia'],
-                    'Locality': credits.loc[i, 'Domicilio'][1],
-                    'Street': credits.loc[i, 'Domicilio'][0],
-                    'Nro': None,
-                    'CP': credits.loc[i, 'Codigo Postal'],
-                    'Feature': None,
-                    'Email': credits.loc[i, 'Mail'],
-                    'Telephone': credits.loc[i, 'Telefono'],
-                    'Seniority': None,
-                    'Salary': credits.loc[i, 'Actividad Laboral (Ingreso mensual)'],
-                    'CBU': None,
-                    'Collection_Entity': credits.loc[i, 'Decreto 1412'],
-                    'Employer': None,
-                    'Dependence': None,
-                    'CUIT_Employer': None,
-                    'Empl_Prov': None,
-                    'Empl_Loc': None,
-                    'Empl_Adress': None,
-                    'Date_Settlement': credits.loc[i, 'Fecha de Liquidacion '],
-                    'Cap_Requested': credits.loc[i, 'Capital'],
-                    'Cap_Grant': credits.loc[i, 'Capital'],
-                    'N_Inst': credits.loc[i, 'n.º de Cuota'],
-                    'First_Inst_Purch': first_inst[i],
-                    'TEM_W_IVA': None,
-                    'V_Inst': credits.loc[i, 'Monto de cuota'],
-                    'D_F_Due': credits.loc[i, 'Fecha de Vencimiento']
-                }
-        
     return df
 
 
-def update_customers(df, date, save):
+def update_customers(df: pd.DataFrame, date, save: bool = True):
     """
     Updates the 'customers' table in the database by identifying new customers and updating existing ones.
 
     Parameters:
-        df: DataFrame
-            The input DataFrame containing customer data to be processed.
-        date: str or datetime
-            The date to assign to the 'Last_Update' column.
-        save: bool, optional (default=True)
-            If True, saves changes to the database; otherwise, modifies data locally.
+        df (pd.DataFrame): Input DataFrame containing customer data to be processed.
+        date (str or datetime): The date to assign to the 'Last_Update' column.
+        save (bool, optional): If True, saves changes to the database; otherwise, modifies data locally.
 
     Returns:
-        DataFrame: Updated customers DataFrame.
+        pd.DataFrame: Updated customers DataFrame.
     """
-    # Load existing customers table
+
+    # ✅ Step 1: Load existing customers table
     customers = pd.read_sql('customers', engine, index_col='ID')
 
-    # Process province IDs
-    df['ID_Province'] = [id_province(p) for p in df['Province']]
-    df['ID_Empl_Prov'] = [id_province(p) for p in df['Empl_Prov']]
+    # ✅ Step 2: Process required fields
+    df['ID_Province'] = df['Province'].apply(id_province)
+    df['ID_Empl_Prov'] = df['Empl_Prov'].apply(id_province)
     df['Last_Update'] = date
-    df['Gender'] = [categorical_gender(g) for g in df['Gender']]
-    df['Country'] = df['Country'].fillna('Argentina', axis=0)
+    df['Gender'] = df['Gender'].apply(categorical_gender)
+    df['Country'] = df['Country'].fillna('Argentina')
 
-    # Filter columns to match existing customers table
-    new_customers = df[[col for col in customers.columns if col in df.columns]]
+    # ✅ Step 3: Keep only columns that exist in the customers table
+    valid_columns = [col for col in customers.columns if col in df.columns]
+    new_customers = df[valid_columns]
 
-    # Separate new and existing customers
-    act_customers = new_customers.loc[new_customers['CUIL'].isin(customers['CUIL'])]
-    new_customers = new_customers.loc[~new_customers['CUIL'].isin(customers['CUIL'])]
+    # ✅ Step 4: Identify new and existing customers
+    existing_customers = new_customers[new_customers['CUIL'].isin(customers['CUIL'])]
+    new_customers = new_customers[~new_customers['CUIL'].isin(customers['CUIL'])]
 
+    # ✅ Step 5: Save data if `save=True`
     if save:
-        # Save new customers to database
+        # Save new customers to the database
         if not new_customers.empty:
             new_customers.to_sql('customers', engine, index=False, if_exists='append')
 
         # Update existing customers
-        if not act_customers.empty:
-            act_customer = act_customers.copy()
-            for i in act_customers.index:
-                if not act_customer.empty:
-                    add_customer(customer=act_customer)
-                    act_customer = act_customer.drop(index=i)
+        if not existing_customers.empty:
+            for _, row in existing_customers.iterrows():
+                add_customer(customer=row.to_frame().T)
 
         # Reload updated customers table
         customers = pd.read_sql('customers', engine, index_col='ID')
-        new_customers = customers.loc[customers['CUIL'].isin(df['CUIL'])]
-    else:
-        # Update indices for local changes
-        act_customers.index = [
-            customers.loc[customers['CUIL'] == act_customers.loc[i, 'CUIL']].index[0]
-            for i in act_customers.index
-        ]
-        new_customers.index = [
-            customers.index.max() + i + 1 for i in range(len(new_customers))
-        ]
-        new_customers = pd.concat([act_customers, new_customers], ignore_index=True)
+        new_customers = customers[customers['CUIL'].isin(df['CUIL'])]
 
-        # Adjust indices if customers table is empty
+    else:
+        # ✅ Step 6: Update indices for local changes
+        existing_customers.index = existing_customers['CUIL'].apply(lambda cuil: customers.index[customers['CUIL'] == cuil].tolist()[0])
+        new_customers.index = range(customers.index.max() + 1, customers.index.max() + 1 + len(new_customers))
+        
+        # Merge existing and new customers
+        new_customers = pd.concat([existing_customers, new_customers], ignore_index=True)
+
+        # Adjust index if the table is empty
         if customers.empty:
             new_customers.index += 1
 
     return new_customers
 
 
-def add_portfolio_purchase(date, id_supplier, tna, buyback, resource, iva, save):
+def add_portfolio_purchase(date, id_supplier, tna, buyback, resource, iva, save=True):
     """
     Adds a new record to the 'portfolio_purchases' table in the database.
 
-    Parameters:
-        engine: SQLAlchemy Engine
-            A database connection engine.
-        date: str or datetime
-            The date of the portfolio purchase.
-        id_supplier: int
-            The ID of the supplier company associated with the purchase.
-        tna: float
-            The TNA (nominal annual rate) value.
-        buyback: bool
-            Indicates if the purchase has a buyback guarantee.
-        resource: bool
-            Indicates if the purchase involves a resource.
-        iva: bool
-            Indicates if the purchase includes VAT.
-        save: bool, optional (default=True)
-            If True, saves changes to the database; otherwise, modifies data locally.
-
     Returns:
-        DataFrame: The updated 'portfolio_purchases' DataFrame with the new entry added.
+        int: The new portfolio purchase ID.
     """
-    # Load existing 'portfolio_purchases' table
-    pp = pd.read_sql('portfolio_purchases', engine, index_col='ID')
+    id_purch = pd.read_sql("SELECT MAX(ID) FROM portfolio_purchases", engine).iloc[0, 0]
+    id_purch = 1 if pd.isna(id_purch) else int(id_purch) + 1
 
-    # Determine the new purchase ID
-    id_purch = int(pp.index.max() + 1) if not pp.empty else 1
-
-    # Create a new record
-    new_purchase = {
+    new_purchase = pd.DataFrame([{
+        'ID': id_purch,
         'Date': date,
         'ID_Company': id_supplier,
         'TNA': tna,
-        'Buyback': 1 if buyback else 0,
-        'Resource': 1 if resource else 0,
-        'IVA': 1 if iva else 0
-    }
+        'Buyback': int(buyback),
+        'Resource': int(resource),
+        'IVA': int(iva)
+    }])
+    new_purchase.index = [id_purch]
 
-    # Append the new record to the DataFrame
-    pp = pp.iloc[0:0]  # Clear the DataFrame while retaining the structure
-    pp.loc[id_purch] = new_purchase
-    
     if save:
-        pp.to_sql('portfolio_purchases', engine, index=False, if_exists='append')
+        try:
+            new_purchase.to_sql('portfolio_purchases', engine, index=False, if_exists='append')
+            print(f"✅ Portfolio purchase ID {id_purch} successfully added for supplier {id_supplier}.")
+        except Exception as e:
+            print(f"❌ Error adding portfolio purchase: {e}")
 
-    return pp
+    return id_purch, new_purchase  # ✅ Ensure this new purchase is returned
 
 
-def process_portfolio(df, new_customers, id_bp, id_purch, iva, date, save):
+def process_portfolio(df, new_customers, id_bp, id_purch, iva, date, save=True):
     """
     Processes a portfolio by generating new credits, installments, and collections.
 
-    This function:
-    - Calculates `TEM_W_IVA` for missing or zero values in the input DataFrame `df`.
-    - Generates new credits and corresponding installments based on data in `df` and `new_customers`.
-    - Updates the `new_credits` and `installments` DataFrames with calculated values.
-    - Creates collection entries for installments that are marked as 'NO COMPRADA'.
-    - Ensures unique IDs for new credits and installments by querying the database.
-
-    Args:
-    df (pandas.DataFrame): The DataFrame containing credit and installment data to be processed.
-    new_customers (pandas.DataFrame): The DataFrame containing information about new customers.
-    id_bp (int): The business plan ID to be used in credit creation.
-    id_purch (int): The purchase ID to be used in credit creation.
-    date (str): The date for the collection emission (used in the collections DataFrame).
-    save: bool, optional (default=True): If True, saves changes to the database; otherwise, modifies data locally.
+    Parameters:
+        df (pd.DataFrame): DataFrame containing credit and installment data.
+        new_customers (pd.DataFrame): DataFrame containing updated customer information.
+        id_bp (int): Business plan ID to be used for credit creation.
+        id_purch (int): Purchase ID to be used for credit creation.
+        date (str): Date for the collection emission.
+        save (bool): If True, saves changes to the database.
 
     Returns:
-    tuple: A tuple containing three pandas DataFrames:
-        - new_credits (pandas.DataFrame): The DataFrame containing the newly generated credits.
-        - installments (pandas.DataFrame): The DataFrame containing the newly generated installments.
-        - collections (pandas.DataFrame): The DataFrame containing the collections based on installment conditions.
+        tuple:
+            - new_credits (pd.DataFrame): Newly generated credits.
+            - installments (pd.DataFrame): Newly generated installments.
+            - collections (pd.DataFrame): Collections data based on installment conditions.
     """
 
-    # Initialize lists to collect new credits and installments
+    # ✅ Step 1: Calculate TEM_W_IVA where necessary
+    filter = df['TEM_W_IVA'].isna() | (df['TEM_W_IVA'] == 0)
+    df.loc[filter, 'TEM_W_IVA'] = df.loc[filter].apply(
+        lambda row: npf.rate(row['N_Inst'], row['V_Inst'], -row['Cap_Grant'], 0.0, guess=0.1), axis=1
+    )
+
+    # ✅ Step 2: Get last credit ID to ensure unique IDs for new credits
+    last_credit = pd.read_sql("SELECT MAX(ID) FROM credits", engine).iloc[0, 0]
+    last_credit = 0 if pd.isna(last_credit) else int(last_credit)
+
+    # ✅ Step 3: Generate new credits and installments
     new_credits = []
     installments = []
-    
-    # Calculate TEM_W_IVA where necessary
-    for i in df.index:
-        if pd.isna(df.loc[i, 'TEM_W_IVA']) or df.loc[i, 'TEM_W_IVA'] == 0.0:
-            df.loc[i, 'TEM_W_IVA'] = npf.rate(df.loc[i, 'N_Inst'], df.loc[i, 'V_Inst'], -df.loc[i, 'Cap_Grant'], 0.0, guess = 0.1)
-    
-    # Get last credit ID to ensure unique IDs for new credits
-    last_credit = pd.read_sql('credits', engine, index_col='ID')
-    last_credit = 0 if last_credit.empty else last_credit.index.max()
-    
-    # Loop through the DataFrame to generate new credits and installments
-    for i in df.index:
+
+    for _, row in df.iterrows():
         last_credit += 1
         nc, insts = new_credit(
-            id_customer=new_customers.loc[new_customers['CUIL'] == df.loc[i, 'CUIL']].index.values[0],
-            Date_Settlement=df.loc[i, 'Date_Settlement'],
+            id_customer=new_customers.loc[new_customers['CUIL'] == row['CUIL']].index[0],
+            Date_Settlement=row['Date_Settlement'],
             ID_BP=id_bp,
-            Cap_Requested=df.loc[i, 'Cap_Requested'],
-            Cap_Grant=df.loc[i, 'Cap_Grant'],
-            N_Inst=df.loc[i, 'N_Inst'],
-            TEM_W_IVA=df.loc[i, 'TEM_W_IVA'],
-            V_Inst=df.loc[i, 'V_Inst'],
-            D_F_Due=df.loc[i, 'D_F_Due'],
+            Cap_Requested=row['Cap_Requested'],
+            Cap_Grant=row['Cap_Grant'],
+            N_Inst=row['N_Inst'],
+            TEM_W_IVA=row['TEM_W_IVA'],
+            V_Inst=row['V_Inst'],
+            D_F_Due=row['D_F_Due'],
             ID_Purch=id_purch,
-            First_Inst_Purch=df.loc[i, 'First_Inst_Purch'],
+            First_Inst_Purch=row['First_Inst_Purch'],
             ID_Sale=None,
             First_Inst_Sold=0,
-            id_external=i,
+            id_external=row.name,
             massive=last_credit
         )
-        # Append the generated new credit and installments to respective lists
         new_credits.append(nc)
         installments.append(insts)
-    
-    # Concatenate all new credits and installments
+
+    # ✅ Step 4: Concatenate all new credits and installments
     new_credits = pd.concat(new_credits, ignore_index=False)
     new_credits['First_Inst_Purch'] = new_credits['First_Inst_Purch'].astype(int)
+
     installments = pd.concat(installments, ignore_index=False, join='outer')
-    
-    # Get the last installment ID from the database
-    last_inst = pd.read_sql('installments', engine, index_col='ID')
-    last_inst = last_inst.index.max() if not last_inst.empty else 0
-    
-    # Reset index for installments and assign new unique indices
+
+    # ✅ Step 5: Get last installment ID from the database
+    last_inst = pd.read_sql("SELECT MAX(ID) FROM installments", engine).iloc[0, 0]
+    last_inst = 0 if pd.isna(last_inst) else int(last_inst)
+
+    # ✅ Step 6: Assign new unique IDs to installments
     installments.reset_index(drop=True, inplace=True)
-    new_index = [last_inst + i for i in range(1, len(installments)+1)]
-    installments.index = new_index
-    
+    installments.index = range(last_inst + 1, last_inst + 1 + len(installments))
+
+    # ✅ Step 7: Handle IVA (set to 0 if not applicable)
     if not iva:
-        installments['IVA'] = 0
+        installments['IVA'] = 0.0
         installments['Total'] = installments['Capital'] + installments['Interest']
-        
-    # Ensure ID_Op and Nro_Inst are integers
+
+    # ✅ Step 8: Ensure correct data types
     installments['ID_Op'] = installments['ID_Op'].astype(int)
     installments['Nro_Inst'] = installments['Nro_Inst'].astype(int)
-    # Initialize an empty collection DataFrame
-    collections = pd.read_sql('collection', engine, index_col='ID').iloc[0:0]
+
+    # ✅ Step 9: Process collections
+    collections = pd.DataFrame(columns=['ID_Inst', 'D_Emission', 'Type_Collection', 'Capital', 'Interest', 'IVA', 'Total'])
+    collections.index.name = 'ID'
     
-    # Process collections based on installment conditions
-    j = 0
+    j = 0 
     for i in installments.index:
         f_inst_purch = new_credits.loc[installments.loc[i, 'ID_Op'], 'First_Inst_Purch']
         if installments.loc[i, 'Nro_Inst'] < f_inst_purch:
@@ -401,10 +425,16 @@ def process_portfolio(df, new_customers, id_bp, id_purch, iva, date, save):
                 'Total': installments.loc[i, 'Total']
             }
 
+    # ✅ Step 10: Save data if `save=True`
     if save:
-        new_credits.to_sql('credits', engine, index=False, if_exists='append')
-        installments.to_sql('installments', engine, index=False, if_exists='append')
-        collections.to_sql('collection', engine, index=False, if_exists='append')
+        try:
+            new_credits.to_sql('credits', engine, index=False, if_exists='append')
+            installments.to_sql('installments', engine, index=False, if_exists='append')
+            collections.to_sql('collection', engine, index=False, if_exists='append')
+
+            print("✅ Portfolio processing completed successfully.")
+        except Exception as e:
+            print(f"❌ Error saving portfolio data: {e}")
 
     return new_credits, installments, collections
 
@@ -423,50 +453,62 @@ def portfolio_buyer(
         cfl: bool = False,
         save: bool = False):
     """
-    Function to process the purchase of a portfolio of credits, update customers, 
-    and generate necessary data for further analysis or storage.
+    Processes the purchase of a credit portfolio, updates customers, 
+    and generates related data for analysis or storage.
 
     Parameters:
-    - path (str): Path to the input data file (CSV or Excel).
-    - id_supplier (int): ID of the supplier providing the portfolio.
-    - id_bp (int): ID of the business plan associated with the purchase.
-    - tna (float): The annual nominal interest rate (TNA).
-    - resource (bool): Indicates whether resources are involved in the purchase.
-    - iva (bool): Indicates whether VAT applies to the purchase.
-    - buyback (bool): Optional flag for buyback conditions (default is False).
-    - date (pd.Timestamp): Date of the transaction (default is the current date).
-    - model (bool): Optional flag to determine if the model is used (default is True).
-    - iqua (bool): Flag for a specific type of data processing (default is False).
-    - cfl (bool): Another optional flag for data processing (default is False).
-    - save (bool): Flag to indicate if the data should be saved to the database.
+        path (str): Path to the input data file (CSV or Excel).
+        id_supplier (int): Supplier ID providing the portfolio.
+        id_bp (int): Business plan ID associated with the purchase.
+        tna (float): Annual nominal interest rate (TNA).
+        resource (bool): Indicates whether resources are involved in the purchase.
+        iva (bool): Indicates whether VAT applies to the purchase.
+        buyback (bool): Optional flag for buyback conditions (default is False).
+        date (pd.Timestamp): Transaction date (default: current date).
+        model (bool): Determines if the model is used (default is True).
+        iqua (bool): Specific flag for data processing (default is False).
+        cfl (bool): Additional optional flag for data processing (default is False).
+        save (bool): If True, saves data to the database.
 
     Returns:
-    - df (DataFrame): Processed data after the portfolio is purchased.
-    - new_customers (DataFrame): Updated customer information.
-    - pp (DataFrame): Portfolio purchase data.
-    - new_credits (DataFrame): Processed new credits.
-    - installments (DataFrame): Processed installment information.
-    - collections (DataFrame): Processed collection information.
+        tuple: Processed data, including:
+            - df (DataFrame): Processed portfolio data.
+            - new_customers (DataFrame): Updated customer data.
+            - pp (DataFrame): Portfolio purchase record.
+            - new_credits (DataFrame): New credit records.
+            - installments (DataFrame): Installment records.
+            - collections (DataFrame): Collection data.
     """
-    
-    # Step 1: Validate the supplier and business plan to ensure they are correct.
-    validate_supplier_and_business_plan(id_supplier, id_bp)
+    try:
+        # ✅ Step 1: Validate supplier and business plan
+        validate_supplier_and_business_plan(id_supplier, id_bp)
 
-    # Step 2: Read the data from the given path and process it based on various flags.
-    df = read_data(path, model, id_supplier, iqua, cfl)
+        # ✅ Step 2: Read input data & process it based on provided flags
+        df = read_data(path=path, model=model, id_supplier=id_supplier, iqua=iqua, cfl=cfl)
 
-    # Step 3: Update customer information based on the data and current date.
-    new_customers = update_customers(df, date, save)
+        # ✅ Step 3: Update customer data with the latest records
+        new_customers = update_customers(df=df, date=date, save=save)
 
-    # Step 4: Add the portfolio purchase to the system and retrieve its ID.
-    pp = add_portfolio_purchase(date, id_supplier, tna, buyback, resource, iva, save)
-    id_purch = pp.index.values[0]  # Get the first purchase ID
+        # ✅ Step 4: Register the portfolio purchase & retrieve its ID
+        id_purch, new_purch = add_portfolio_purchase(date=date, id_supplier=id_supplier, tna=tna, 
+                                    buyback=buyback, resource=resource, iva=iva, save=save)
+        
+        # ✅ Step 5: Process the portfolio & generate credit-related records
+        new_credits, installments, collections = process_portfolio(
+            df=df, new_customers=new_customers, id_bp=id_bp, id_purch=id_purch, 
+            iva=iva, date=date, save=save
+        )
 
-    # Step 5: Process the portfolio to generate new credits, installments, and collections.
-    new_credits, installments, collections = process_portfolio(df, new_customers, id_bp, id_purch, iva, date, save)
+        # ✅ Fetch company name from the database
+        company_name_query = f"SELECT Social_Reason FROM companies WHERE ID = {id_supplier}"
+        company_name = pd.read_sql(company_name_query, engine).iloc[0, 0]
 
-    # Return the processed data.
-    return df, new_customers, pp, new_credits, installments, collections
+        print(f"✅ Portfolio purchase successfully processed for company {company_name} on {date}.")
+        return df, new_customers, new_purch, new_credits, installments, collections
+
+    except Exception as e:
+        print(f"❌ Error processing portfolio purchase: {e}")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 
 def translate_seller(full_inst, credits, customers, sheet_names):

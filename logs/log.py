@@ -1,42 +1,80 @@
+import os
 import pandas as pd
 import numpy as np
-
-# Import your module
-from app.modules.database.connection import engine
-from sqlalchemy import text
-from app.modules.database.companies import add_company, add_bussines_plan
-from app.modules.database.portfolio_manager import portfolio_buyer, add_portfolio_purchase
-from app.modules.database.credit_manager import credits_balance
-from app.modules.database.collection import resource_collection, charging, collection_w_early_cancel, delete_collection_by_id, TypeDataCollection
-from sqlalchemy import Enum
+import sqlparse
+from sqlalchemy import text, Enum
 from sqlalchemy.exc import IntegrityError as alIE
 from pymysql.err import IntegrityError as myIE
 
+# Database connection
+from app.modules.database.connection import engine
+
+# Import functions for company management
+from app.modules.database.companies import add_company, add_bussines_plan
+
+# Import functions for portfolio management
+from app.modules.database.portfolio_manager import portfolio_buyer, add_portfolio_purchase
+
+# Import functions for credit management
+from app.modules.database.credit_manager import credits_balance
+
+# Import functions for collection management
+from app.modules.database.collection import (
+    resource_collection,
+    charging,
+    collection_w_early_cancel,
+    delete_collection_by_id,
+    TypeDataCollection
+)
+
+# Confirm all modules imported successfully
+print(f'✅ The system correctly imports all modules.')
+
+# Define the SQL script path
 sql_script_path = 'docs/AppStructure.sql'
 
-try:
-    with engine.connect() as connection:
-        # Read the SQL script
-        with open(sql_script_path, 'r') as file:
+# Check if the file exists
+if not os.path.exists(sql_script_path):
+    print(f"❌ Error: SQL script file '{sql_script_path}' not found.")
+else:
+    try:
+        with open(sql_script_path, 'r', encoding='utf-8') as file:
             sql_script = file.read()
 
-        # Split script into individual statements
-        for statement in sql_script.split(';'):  # Handle multiple statements
-            if statement.strip():  # Skip empty statements
-                # Use the `text` function to execute raw SQL
-                connection.execute(text(statement))
+        # Parse and split SQL script into individual statements correctly
+        statements = sqlparse.split(sql_script)
 
-    print("SQL script executed successfully.")
+        with engine.connect() as connection:
+            with connection.begin():  # Ensures transactional integrity
+                for statement in statements:
+                    statement = statement.strip()
+                    if statement:  # Avoid executing empty statements
+                        connection.execute(text(statement))
 
+        print("✅ SQL script executed successfully.")
+
+    except Exception as e:
+        print(f"❌ Error executing SQL script: {e}")
+
+
+# Lista de provincias
+province_list = [
+    'Buenos Aires', 'Chubut', 'Ciudad Autónoma de Buenos Aires', 'Catamarca', 'Chaco',
+    'Córdoba', 'Corrientes', 'Entre Ríos', 'Formosa', 'Jujuy', 'La Pampa', 'La Rioja',
+    'Mendoza', 'Misiones', 'Neuquén', 'Río Negro', 'Salta', 'San Juan', 'San Luis',
+    'Santa Cruz', 'Santa Fe', 'Santiago del Estero', 'Tierra del Fuego', 'Tucumán'
+]
+
+# Crear DataFrame con índice desde 1
+prov = pd.DataFrame.from_dict({i: {'Name': name} for i, name in enumerate(province_list, start=1)}, orient='index')
+prov.index.name = 'ID'
+
+# Insertar en la base de datos
+try:
+    prov.to_sql('provinces', engine, index=True, if_exists='append')
+    print(f"✅ {len(prov)} provinces successfully inserted into the database.")
 except Exception as e:
-    print(f"Error: {e}")
-
-prov = pd.DataFrame(columns=["ID", "Name"])
-prov.set_index("ID", inplace=True)
-for i, j in enumerate(['Buenos Aires', 'Chubut', 'Ciudad Autónoma de Buenos Aires', 'Catamarca', 'Chaco', 'Córdoba', 'Corrientes', 'Entre Ríos', 'Formosa', 'Jujuy', 'La Pampa', 'La Rioja', 'Mendoza', 'Misiones', 'Neuquén', 'Río Negro', 'Salta', 'San Juan', 'San Luis', 'Santa Cruz', 'Santa Fe', 'Santiago del Estero', 'Tierra del Fuego', 'Tucumán']):
-    prov.loc[i+1] = j
-prov.sort_values(by=['Name'], inplace=True)
-prov.to_sql('provinces', engine, index=True, if_exists='append')
+    print(f"❌ Error inserting provinces: {e}")
 
 add_company('NeoCrediT S.A.', 30717558142)
 add_company('Onoyen S.R.L.', 30711188069)
@@ -74,43 +112,76 @@ add_bussines_plan(3,
                   float(input('Comisión sobre cada crédito:'))
                 )
 
-setts = pd.read_sql('settings', engine, index_col='ID')
+# Define new settings as a list of dictionaries
+new_settings = [
+    {'Detail': 'Día de Vto. Predeterminado', 'Type': 'I', 'Value': 28},
+    {'Detail': 'Periodos de Gracia', 'Type': 'I', 'Value': 2},
+    {'Detail': 'Tolerancia Cobranzas', 'Type': 'F', 'Value': 0.05}
+]
 
-setts.loc[0, ['Detail', 'Type', 'Value']] = {'Detail': 'Día de Vto. Predeterminado', 'Type': 'I', 'Value': "28"}
-setts.loc[1, ['Detail', 'Type', 'Value']] = {'Detail': 'Periodos de Gracia', 'Type': 'I', 'Value': "2"}
-setts.loc[2, ['Detail', 'Type', 'Value']] = {'Detail': 'Tolerancia Cobranzas', 'Type': 'F', 'Value': '0.05'}
-setts.to_sql('settings', engine, if_exists='append', index = False)
+# Convert list to DataFrame
+setts_new = pd.DataFrame.from_records(new_settings)
 
-path = 'inputs/Onoyen - Cartera Nro. 1.xlsx'
-portfolio_buyer(path, 2, 2, 0.885, True, False, date=pd.Period("2022-12-21"), save=True, model=True)
+# Insert into SQL (appends or replaces)
+try:
+    setts_new.to_sql('settings', engine, if_exists='append', index=False)
+    print("✅ Settings successfully updated in the database.")
+except Exception as e:
+    print(f"❌ Error updating settings: {e}")
 
-path = 'inputs/Onoyen - Cartera Nro. 2.xlsx'
-portfolio_buyer(path, 2, 2, 0.87, True, False, date=pd.Period("2023-02-22"), save=True, model=False)
 
-path = 'inputs/Onoyen - Cartera Nro. 3.xlsx'
-portfolio_buyer(path, 2, 2, 0.67, True, False, date=pd.Period("2023/03/21"), save=True, model=False)
+# List of portfolios with their parameters
+portfolios = [
+    ("inputs/Onoyen - Cartera Nro. 1.xlsx", 2, 2, 0.885, "2022-12-21", True),
+    ("inputs/Onoyen - Cartera Nro. 2.xlsx", 2, 2, 0.87, "2023-02-22", False),
+    ("inputs/Onoyen - Cartera Nro. 3.xlsx", 2, 2, 0.67, "2023-03-21", False),
+    ("inputs/Onoyen - Cartera Nro. 4.xlsx", 2, 2, 0.62, "2023-04-18", False),
+    ("inputs/Onoyen - Cartera Nro. 5.xlsx", 2, 2, 0.59, "2023-05-18", False),
+    ("inputs/Onoyen - Cartera Nro. 6.xlsx", 2, 2, 0.48, "2023-06-15", False),
+]
 
-path = 'inputs/Onoyen - Cartera Nro. 4.xlsx'
-portfolio_buyer(path, 2, 2, 0.62, True, False, date=pd.Period("2023/04/18"), save=True, model=False)
+# Process each portfolio file
+for path, supplier_id, business_plan_id, tna, date, model in portfolios:
+    portfolio_buyer(
+        path=path,
+        id_supplier=supplier_id,
+        id_bp=business_plan_id,
+        tna=tna,
+        resource=True,
+        iva=False,
+        date=pd.Period(date),
+        save=True,
+        model=model
+    )
 
-path = 'inputs/Onoyen - Cartera Nro. 5.xlsx'
-portfolio_buyer(path, 2, 2, 0.59, True, False, date=pd.Period("2023/05/18"), save=True, model=False)
 
-path = 'inputs/Onoyen - Cartera Nro. 6.xlsx'
-portfolio_buyer(path, 2, 2, 0.48, True, False, date=pd.Period("2023/06/15"), save=True, model=False)
-
+# Process early resource collections before the specified date
 balance = credits_balance()
-fecha = pd.Timestamp("2024/12/01")
-for d in balance['D_Due'].unique():
-    if d < fecha:
-        resource_collection(2, balance.loc[balance['D_Due'] == d, 'Total'].sum(), date=d, save=True)
+fecha = pd.Timestamp("2024-12-01")
 
+# Collect all amounts due before the specified date
+early_balance = balance[balance["D_Due"] < fecha].groupby("D_Due")["Total"].sum()
+
+# Process each due date
+for due_date, total_amount in early_balance.items():
+    resource_collection(2, total_amount, date=due_date, save=True)
+    print(f"✅ Processed resource collection for due date {due_date}, Amount: {total_amount}")
+
+# Process final resource collection for amounts due up to 2024-12-30
 balance = credits_balance()
-fecha = pd.Timestamp("2024/12/30")
-resource_collection(2, balance.loc[balance['D_Due'] <= fecha, 'Total'].sum(), date=fecha, save=True)
+fecha_final = pd.Timestamp("2024-12-30")
 
-print('Cartera de créditos Onoyen migrada, correctamente.')
+# Total sum of all amounts due up to `fecha_final`
+total_final = balance.loc[balance["D_Due"] <= fecha_final, "Total"].sum()
 
+# Process the final resource collection
+resource_collection(2, total_final, date=fecha_final, save=True)
+print(f"✅ Final resource collection processed for {fecha_final}, Total Amount: {total_final}")
+
+# Confirm successful migration
+print("✅ Onoyen credit portfolio successfully migrated.")
+
+'''
 print('Comenzamos a migar la cartera de AMUF.')
 
 class MaritalStatus(Enum):
@@ -382,3 +453,4 @@ add_bussines_plan(3,
                   float(input('Comisión por cobranza:')),
                   float(input('Comisión sobre cada crédito:'))
                 )
+'''
