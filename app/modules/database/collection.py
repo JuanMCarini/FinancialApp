@@ -10,10 +10,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.exc import IntegrityError
 from app.modules.database.credit_manager import credits_balance
 from app.modules.database.structur_databases import Company, Collection
-from sqlalchemy.exc import IntegrityError as alIE
+from sqlalchemy.exc import IntegrityError as alIE, SQLAlchemyError
 from pymysql.err import IntegrityError as myIE
-
-
 
 class TypeDataCollection(Enum):
     CUIL = 'CUIL'
@@ -87,70 +85,147 @@ class ResourceError(Exception):
 
 
 def _get_customer_id(ident_type, identifier):
-    """Retrieve the customer ID based on the identifier type."""
-    customers = pd.read_sql('customers', engine, index_col='ID')
-    if ident_type == TypeDataCollection.DNI:
-        return customers.loc[customers['DNI'] == identifier].index.values[0]
-    elif ident_type == TypeDataCollection.CUIL:
-        return customers.loc[customers['CUIL'] == identifier].index.values[0]
+    """
+    Retrieve the customer ID based on the identifier type.
 
+    Args:
+        ident_type (TypeDataCollection): Type of identifier (DNI or CUIL).
+        identifier (int): The identifier value to look up.
+
+    Returns:
+        int or None: The customer ID if found, otherwise None.
+
+    Raises:
+        ValueError: If the identifier type is invalid.
+    """
+    # ✅ Load customer data
+    customers = pd.read_sql('customers', engine, index_col='ID')
+
+    # ✅ Check identifier type and filter safely
+    if ident_type == TypeDataCollection.DNI:
+        match = customers.loc[customers['DNI'] == identifier]
+    elif ident_type == TypeDataCollection.CUIL:
+        match = customers.loc[customers['CUIL'] == identifier]
+    else:
+        raise ValueError(f"Invalid identifier type: {ident_type}")
+
+    # ✅ Ensure at least one match is found before accessing index[0]
+    return match.index.values[0] if not match.empty else None
 
 def _get_credits_by_identifier(ident_type, identifier, id_supplier):
-    """Fetch credits based on the provided identifier type and value."""
+    """
+    Fetch credits based on the provided identifier type and value.
+
+    Args:
+        ident_type (TypeDataCollection): Type of identifier (DNI, CUIL, ID_Op, ID_External).
+        identifier (int): The identifier value to look up.
+        id_supplier (int, optional): Supplier ID for filtering.
+
+    Returns:
+        tuple: (List of credit IDs, DataFrame of all credits).
+
+    Raises:
+        IdentifierError: If no credits are found for the given identifier.
+    """
+    
+    # ✅ Load credit data
     credits = pd.read_sql('credits', engine, index_col='ID')
     
-    if ident_type in [TypeDataCollection.DNI, TypeDataCollection.CUIL]:
+    # ✅ Handle customer-based identifiers (DNI, CUIL)
+    if ident_type in {TypeDataCollection.DNI, TypeDataCollection.CUIL}:
         id_cst = _get_customer_id(ident_type, identifier)
 
         if id_supplier:
+            # ✅ Load business plan and filter by supplier
             bp = pd.read_sql('business_plan', engine, index_col='ID')
             bps = bp.loc[bp['ID_Company'] == id_supplier].index.values
             id_credits = credits.loc[(credits['ID_Client'] == id_cst) & (credits['ID_BP'].isin(bps))].index.values
         else:
             id_credits = credits.loc[credits['ID_Client'] == id_cst].index.values
         
-        if len(id_credits) == 0:
+        if id_credits.size == 0:
             raise IdentifierError(ident_type, identifier)
 
-    elif ident_type in [TypeDataCollection.ID_Op]:
-        id_credits = [identifier]
-        
+    # ✅ Handle direct operation ID lookup
+    elif ident_type == TypeDataCollection.ID_Op:
+        id_credits = [identifier] if identifier in credits.index else []
+
+    # ✅ Handle external ID lookup
     else:
         id_credits = credits.loc[credits['ID_External'] == identifier].index.values
 
-    return id_credits, credits
-
+    return list(id_credits), credits  # ✅ Ensure id_credits is always a list
 
 def _prepare_balance(id_credits):
-    """Prepare and process the balance data for the given credits."""
-    balance = credits_balance()
-    balance = balance.loc[balance['ID_Op'].isin(id_credits)]
-    balance.sort_values(by=['D_Due', 'ID_Op', 'Nro_Inst'], inplace=True)
-    balance = balance.reset_index()
-    balance['Accumulated'] = [balance.loc[balance.index <= i, 'Total'].sum() for i in balance.index]
-    balance.set_index('ID', inplace=True)
-    return balance
+    """
+    Prepare and process the balance data for the given credits.
 
+    Args:
+        id_credits (list): List of credit IDs to filter.
+
+    Returns:
+        pd.DataFrame: Processed balance DataFrame, sorted and with accumulated totals.
+    """
+    # ✅ Retrieve credit balances
+    balance = credits_balance()
+
+    # ✅ Filter balance data based on credit IDs
+    if not id_credits:  # Return empty DataFrame if no credits are provided
+        return balance.iloc[0:0].copy()
+
+    balance = balance.loc[balance['ID_Op'].isin(id_credits)].copy()
+
+    # ✅ Ensure balance is not empty after filtering
+    if balance.empty:
+        return balance  # Return empty DataFrame if no matching records
+
+    # ✅ Sort balance data
+    balance.sort_values(by=['D_Due', 'ID_Op', 'Nro_Inst'], inplace=True)
+
+    # ✅ Reset index for proper iteration and calculations
+    balance.reset_index(inplace=True, drop=False)
+
+    # ✅ Efficient cumulative sum calculation (avoids slow list comprehension)
+    balance['Accumulated'] = balance['Total'].cumsum()
+
+    # ✅ Restore index for consistency
+    balance.set_index('ID', inplace=True)
+
+    return balance.copy()
 
 def _process_regular_collections(balance, amount, date):
-    """Process regular collection installments."""
-    
-    # Initialize an empty collection DataFrame
-    collection = pd.read_sql('collection', engine, index_col='ID').iloc[0:0]
+    """
+    Process regular collection installments.
 
-    for n, i in enumerate(balance.loc[balance['Accumulated'] <= amount].index):
-        collection.loc[n] = {
-            'ID_Inst': i,
-            'D_Emission': date,
-            'Type_Collection': 'COMUN',
-            'Capital': balance.loc[i, 'Capital'],
-            'Interest': balance.loc[i, 'Interest'],
-            'IVA': balance.loc[i, 'IVA'],
-            'Total': balance.loc[i, 'Total']
-        }
-    
+    Args:
+        balance (pd.DataFrame): DataFrame containing installment balances.
+        amount (float): The available amount for collection.
+        date (pd.Timestamp): Date of collection.
+
+    Returns:
+        pd.DataFrame: Processed collection DataFrame.
+    """
+    # ✅ Initialize an empty DataFrame with predefined columns
+    collection_columns = ['ID_Inst', 'D_Emission', 'Type_Collection', 'Capital', 'Interest', 'IVA', 'Total']
+    collection = pd.DataFrame(columns=collection_columns)
+
+    # ✅ Filter balance data to include only installments within available amount
+    eligible_balance = balance.loc[balance['Accumulated'] <= amount].copy()
+
+    # ✅ Return empty DataFrame if no eligible installments
+    if eligible_balance.empty:
+        return collection
+
+    # ✅ Construct the collection DataFrame efficiently
+    collection = eligible_balance[['Capital', 'Interest', 'IVA', 'Total']].copy()
+    collection['ID_Inst'] = eligible_balance.index
+    collection['D_Emission'] = date
+    collection['Type_Collection'] = 'COMUN'
+
+    # ✅ Reset index for proper structure
+    collection.reset_index(drop=True, inplace=True)
+
     return collection
-
 
 def _process_early_payment(complete_balance, amount, collection, date, early: bool = False):
     """Process an early payment for the given balance."""
@@ -191,7 +266,6 @@ def _process_early_payment(complete_balance, amount, collection, date, early: bo
     amount -= total
 
     return collection
-
 
 def _process_penalty(amount, credits, date, id_credits, collection, save, early: bool = False):
     """Process a penalty if there is a remaining amount."""
@@ -249,52 +323,92 @@ def _process_penalty(amount, credits, date, id_credits, collection, save, early:
         
     return collection, cr_penalty, inst
 
-
 def _process_remaining_amount(amount, collection, balance, credits, date, id_credits, save, early: bool = False):
-    """Handle any remaining amount, including early payments or penalties."""
+    """
+    Handle any remaining amount, including early payments or penalties.
+
+    Args:
+        amount (float): Remaining amount after initial collections.
+        collection (pd.DataFrame): DataFrame of processed collections.
+        balance (pd.DataFrame): DataFrame containing credit balances.
+        credits (pd.DataFrame): DataFrame of credit information.
+        date (pd.Timestamp): Transaction date.
+        id_credits (list): List of credit IDs.
+        save (bool): Whether to save the results to the database.
+        early (bool, optional): Flag indicating whether it's an early payment. Default is False.
+
+    Returns:
+        tuple: (Updated collection DataFrame, Penalty credits DataFrame, Installments DataFrame)
+    """
+    # ✅ Deduct collected total from amount
     if not early:
         amount -= collection['Total'].sum()
-    if amount > 0.0 and not balance.loc[~balance.index.isin(collection['ID_Inst'].values)].empty:
+
+    # ✅ Process early payment if balance still exists after previous collections
+    remaining_balance = balance.query("index not in @collection['ID_Inst'].values")
+    
+    if amount > 0.0 and not remaining_balance.empty:
         collection = _process_early_payment(balance, amount, collection, date, early)
-        amount -= collection.iloc[-1]['Total']
+        last_row = collection.iloc[-1] if not collection.empty else None
+        if last_row is not None:
+            amount -= last_row['Total']
 
+    # ✅ Process penalties if amount remains
     if amount > 0.0:
-        if save and not early:
-            collection, cr_penalty, inst = _process_penalty(amount, credits, date, id_credits, collection, save, early)
-            return collection, cr_penalty, inst
-        else:
-            collection, cr_penalty, inst = _process_penalty(amount, credits, date, id_credits, collection, save, early)
-            return collection, cr_penalty, inst
+        collection, cr_penalty, inst = _process_penalty(amount, credits, date, id_credits, collection, save, early)
     else:
-        return collection, pd.DataFrame(), pd.DataFrame()
+        cr_penalty, inst = pd.DataFrame(), pd.DataFrame()
 
+    return collection, cr_penalty, inst
 
-def _solve_rounding(collection, balance, date, early: bool = False, id_credits = None):
-    """Adjusts the collection records to account for small rounding differences in financial calculations."""
-    # Adjust balance by subtracting the sums of collected amounts grouped by installment ID
-    if early:
+def _solve_rounding(collection, balance, date, early: bool = False, id_credits=None):
+    """
+    Adjusts collection records to account for small rounding differences in financial calculations.
+
+    Args:
+        collection (pd.DataFrame): DataFrame containing collected payments.
+        balance (pd.DataFrame): DataFrame containing installment balances.
+        date (pd.Timestamp): Date of the rounding adjustment.
+        early (bool, optional): Whether this is for early payments. Defaults to False.
+        id_credits (list, optional): List of credit IDs, required if `early` is True.
+
+    Returns:
+        pd.DataFrame: Updated collection DataFrame with rounding adjustments applied.
+    """
+
+    # ✅ Recalculate balance if early payment processing is required
+    if early and id_credits:
         balance = _prepare_balance(id_credits)
-    balance[['Capital', 'Interest', 'IVA', 'Total']] -= collection.groupby('ID_Inst')[['Capital', 'Interest', 'IVA', 'Total']].sum()
-    
-    # Identify rows where remaining total balance is small (less than 0.1) but non-zero
-    rounding = balance.loc[(balance['Total'] != 0.0) & (balance['Total'] < 0.1)]
 
-    # Add rounding adjustment entries to the collection for each identified installment
-    for i in rounding.index:
-        if abs(rounding.loc[i, 'Total']) >= 0.001:
-            collection.loc[collection.index.max() + 1] = {
-                'ID_Inst': i,
-                'D_Emission': date,
-                'Type_Collection': 'REDONDEO',
-                'Capital': rounding.loc[i, 'Capital'],
-                'Interest': rounding.loc[i, 'Interest'],
-                'IVA': rounding.loc[i, 'IVA'],
-                'Total': rounding.loc[i, 'Total']
-            }
-    
-    # Return the updated collection DataFrame
+    # ✅ Ensure collection contains necessary columns before subtracting
+    if not collection.empty:
+        balance[['Capital', 'Interest', 'IVA', 'Total']] -= (
+            collection.groupby('ID_Inst')[['Capital', 'Interest', 'IVA', 'Total']].sum()
+        )
+
+    # ✅ Identify rows where remaining balance is small but non-zero
+    rounding = balance.query("Total != 0.0 and Total < 0.1").copy()
+
+    # ✅ Ensure collection index is numeric to avoid NaN issues
+    new_index = collection.index.max()
+    new_index = 0 if pd.isna(new_index) else new_index + 1
+
+    # ✅ Add rounding adjustments
+    if not rounding.empty:
+        adjustments = pd.DataFrame({
+            'ID_Inst': rounding.index,
+            'D_Emission': date,
+            'Type_Collection': 'REDONDEO',
+            'Capital': rounding['Capital'],
+            'Interest': rounding['Interest'],
+            'IVA': rounding['IVA'],
+            'Total': rounding['Total']
+        })
+
+        adjustments.index = range(new_index, new_index + len(adjustments))
+        collection = pd.concat([collection, adjustments])
+
     return collection
-
 
 def filter_credits_with_resources(id_credits, ident_type, identifier):
     """
@@ -302,9 +416,8 @@ def filter_credits_with_resources(id_credits, ident_type, identifier):
 
     Args:
         id_credits (list): List of credit IDs to filter.
-        engine (sqlalchemy.Engine): SQLAlchemy engine for database connection.
-        ident_type (str): Identifier type for error handling.
-        identifier (str): Specific identifier for error handling.
+        ident_type (TypeDataCollection): Identifier type for error handling.
+        identifier (int or str): Specific identifier for error handling.
 
     Returns:
         list: Filtered list of credit IDs where 'Resource' is not 1.
@@ -312,23 +425,34 @@ def filter_credits_with_resources(id_credits, ident_type, identifier):
     Raises:
         ResourceError: If all credits are filtered out but the original list was non-empty.
     """
-    num_credit = len(id_credits)
-    
-    # Load data from the database
+    # ✅ Ensure id_credits is not empty before proceeding
+    if not id_credits:
+        return []
+
+    # ✅ Load relevant tables from the database
     credits = pd.read_sql('credits', engine, index_col='ID')
     pp = pd.read_sql('portfolio_purchases', engine, index_col='ID')
-    
-    # Filter out credits with Resource == 1
-    id_pp_mapping = credits.loc[id_credits, 'ID_Purch']
-    resources = pp.loc[id_pp_mapping, 'Resource']
-    id_credits = [id for id, resource in zip(id_credits, resources) if resource != 1]
-    
-    # Raise error if no valid credits remain but the initial list had items
-    if len(id_credits) == 0 and num_credit > 0:
-        raise ResourceError(ident_type, identifier)
-    
-    return id_credits
 
+    # ✅ Ensure all requested credit IDs exist in the 'credits' table
+    valid_id_credits = [cid for cid in id_credits if cid in credits.index]
+
+    if not valid_id_credits:
+        return []  # Return empty list if none of the given credit IDs exist
+
+    # ✅ Map credits to their associated portfolio purchase IDs
+    id_pp_mapping = credits.loc[valid_id_credits, 'ID_Purch']
+
+    # ✅ Extract 'Resource' values, handling missing data safely
+    resources = pp.loc[id_pp_mapping.dropna(), 'Resource'].fillna(0)
+
+    # ✅ Filter out credits where 'Resource' is 1
+    filtered_credits = [cid for cid, resource in zip(valid_id_credits, resources) if resource != 1]
+
+    # ✅ Raise error if all credits were removed and we started with valid ones
+    if not filtered_credits and valid_id_credits:
+        raise ResourceError(ident_type, identifier)
+
+    return filtered_credits
 
 def charging(
     ident_type: TypeDataCollection,
@@ -336,7 +460,8 @@ def charging(
     amount: float,
     id_supplier: int,
     date: pd.Timestamp = pd.Timestamp.now().strftime('%Y/%m/%d'),
-    save: bool = False):
+    save: bool = False
+):
     """
     Processes a collection operation based on a given identifier and type.
 
@@ -348,70 +473,92 @@ def charging(
         ident_type (TypeDataCollection): Type of identifier (e.g., DNI, CUIL, ID_Op, ID_External).
         identifier (int): Identifier value for the collection.
         amount (float): Amount to be collected.
-        id_supplier (int, optional): ID of the supplier for business plans. Default is None.
+        id_supplier (int, optional): ID of the supplier for business plans.
         date (pd.Timestamp, optional): Collection date. Defaults to the current date.
         save (bool, optional): Whether to save the results to the database. Default is False.
 
     Returns:
-        pd.DataFrame: If `save` is False, returns the collection DataFrame.
-                      If penalties are involved and `save` is False, returns a tuple:
-                      (penalty credits DataFrame, installments DataFrame, collection DataFrame).
+        tuple: If `save` is False, returns a tuple:
+            (collection DataFrame, penalty credits DataFrame, installments DataFrame).
     """
-    # Validate the identifier type and value
+
+    # ✅ Validate the identifier type and value
     TypeDataCollection.validate(identifier, ident_type)
 
-    # Return an empty DataFrame if the collection amount is zero or negative
+    # ✅ Return an empty DataFrame if the collection amount is zero or negative
     if amount <= 0.0:
-        return pd.read_sql('collection', engine, index_col='ID').iloc[0:0]
+        return pd.DataFrame(columns=['ID_Inst', 'D_Emission', 'Type_Collection', 'Capital', 'Interest', 'IVA', 'Total'])
 
-    # Retrieve credits based on identifier type
+    # ✅ Retrieve and filter credits based on identifier type
     id_credits, credits = _get_credits_by_identifier(ident_type, identifier, id_supplier)
     id_credits = filter_credits_with_resources(id_credits, ident_type, identifier)
 
-    # Retrieve and prepare the balance for the credits
+    # ✅ Retrieve and prepare balance data
     balance = _prepare_balance(id_credits)
 
-    # Process regular collections based on the balance and amount
+    # ✅ Process regular collections based on balance and amount
     collection = _process_regular_collections(balance, amount, date)
 
-    # Adjust remaining amount and process early payments or penalties if necessary
+    # ✅ Adjust remaining amount and process early payments or penalties if necessary
     collection, cr_penalty, inst = _process_remaining_amount(amount, collection, balance, credits, date, id_credits, save=False)
-    
-    # Remove zero-total rows and round numerical columns to two decimal places
-    collection = collection.loc[collection['Total'] != 0]
-    for col in ['Capital', 'Interest', 'IVA', 'Total']:
-        collection[col] = collection[col].round(2)
 
-    # Solve any rounding issues and finalize the collection
+    # ✅ Remove zero-total rows and round numerical columns to two decimal places
+    if not collection.empty:
+        collection = collection[collection['Total'] != 0].copy()
+        collection[['Capital', 'Interest', 'IVA', 'Total']] = collection[['Capital', 'Interest', 'IVA', 'Total']].round(2)
+
+    # ✅ Solve rounding discrepancies
     collection = _solve_rounding(collection, balance, date)
 
-    # Save or return the results
+    # ✅ Save results if requested
     if save:
         try:
             if not (cr_penalty.empty or inst.empty):
                 cr_penalty.to_sql('credits', engine, index=False, if_exists='append')
                 inst.to_sql('installments', engine, index=False, if_exists='append')
             collection.to_sql('collection', engine, index=False, if_exists='append')
-        except alIE or myIE:
-            print(f'ID: {identifier}\nPenalty: {cr_penalty}\nInstallment:{inst}\nCollections:{collection}')
+        except (alIE, myIE) as e:
+            print(f"Database Integrity Error: {e}\nID: {identifier}\nPenalty: {cr_penalty}\nInstallment: {inst}\nCollections: {collection}")
+
     return collection, cr_penalty, inst
 
 
 def _process_early_settlement(collection, early, date, collection_type, amount):
-    """Processes early settlement collection installments."""
-    # Iterate over each installment in the early settlements DataFrame
-    for i in early.index:
-        n = collection.index.max() + 1 if len(collection) > 0 else 0
-        # Append the installment details to the collection DataFrame
-        collection.loc[n] = {
-            'ID_Inst': i,
-            'D_Emission': date,
-            'Type_Collection': collection_type,
-            'Capital': early.loc[i, 'Capital'],
-            'Interest': early.loc[i, 'Interest'],
-            'IVA': early.loc[i, 'IVA'],
-            'Total': early.loc[i, 'Total']
-        }
+    """
+    Processes early settlement collection installments.
+
+    Args:
+        collection (pd.DataFrame): Existing collection DataFrame.
+        early (pd.DataFrame): DataFrame of installments eligible for early settlement.
+        date (pd.Timestamp): Collection date.
+        collection_type (str): Type of collection (e.g., 'CAN. ANT.', 'BON. CAN. ANT.').
+        amount (float): Total amount available for collection.
+
+    Returns:
+        pd.DataFrame: Updated collection DataFrame with early settlement records.
+    """
+
+    # ✅ Return collection unchanged if no early installments exist
+    if early.empty:
+        return collection
+
+    # ✅ Ensure collection index is numeric to prevent NaN issues
+    new_index = collection.index.max()
+    new_index = 0 if pd.isna(new_index) else new_index + 1
+
+    # ✅ Create new DataFrame for early settlements
+    early_settlements = early[['Capital', 'Interest', 'IVA', 'Total']].copy()
+    early_settlements['ID_Inst'] = early.index
+    early_settlements['D_Emission'] = date
+    early_settlements['Type_Collection'] = collection_type
+
+    # ✅ Assign new index for proper alignment
+    early_settlements.index = range(new_index, new_index + len(early_settlements))
+
+    # ✅ Concatenate the new early settlements to the collection
+    if early_settlements.empty:
+        early_settlements = pd.DataFrame(columns=collection.columns)  # ✅ Preserve expected column types
+    collection = pd.concat([collection, early_settlements], ignore_index=True)
 
     return collection
 
@@ -439,74 +586,76 @@ def collection_w_early_cancel(
         save (bool): Whether to save the collection records to the database (default is False).
 
     Returns:
-        pd.DataFrame: A DataFrame containing the collection records. 
-                      If penalties or bonuses are involved and `save` is False, 
-                      returns the complete collection DataFrame.
+        tuple: (collection DataFrame, penalty DataFrame, installment DataFrame)
     """
-    # Validate the identifier type and value
+
+    # ✅ Validate identifier
     TypeDataCollection.validate(identifier, ident_type)
 
-    # Return an empty collection if the amount is not positive
+    # ✅ Return empty DataFrame if amount is not positive
     if amount <= 0.0:
-        return pd.read_sql('collection', engine, index_col='ID').iloc[0:0]
+        return pd.DataFrame(columns=['ID_Inst', 'D_Emission', 'Type_Collection', 'Capital', 'Interest', 'IVA', 'Total'])
 
-    # Retrieve credits based on the identifier type
+    # ✅ Retrieve and filter credits
     id_credits, credits = _get_credits_by_identifier(ident_type, identifier, id_supplier)
     id_credits = filter_credits_with_resources(id_credits, ident_type, identifier)
-    
-    # Retrieve and prepare the balance for the credits
-    balance = _prepare_balance(id_credits)
-    common = balance.loc[balance['D_Due'] <= date].copy()  # Due installments
 
-    # Process regular collections for due installments
+    # ✅ Prepare balance
+    balance = _prepare_balance(id_credits)
+
+    # ✅ Separate due and future installments
+    common = balance.query("D_Due <= @date").copy()  # Due installments
+    early = balance.query("D_Due > @date").copy()    # Future installments
+    esd = early.copy()  # For bonus calculations
+
+    # ✅ Process regular collections
     collection = _process_regular_collections(common, amount, date)
     amount -= collection['Total'].sum()
 
-    # Handle early settlements for future installments
-    early = balance.loc[balance['D_Due'] > date].copy()
-    esd = early.copy()  # Early settlement details for bonuses
+    # ✅ Handle early settlements
     early[['Interest', 'IVA']] = 0.0
     early['Total'] = early['Capital']
-    early.sort_values(by=['D_Due', 'ID_Op', 'Nro_Inst'])
-    early['Accumulated'] = [early.loc[esd.index <= i, 'Total'].sum() for i in early.index]
-    early = early.loc[early['Accumulated'] <= amount]
+    early.sort_values(by=['D_Due', 'ID_Op', 'Nro_Inst'], inplace=True)
+    early['Accumulated'] = early['Total'].cumsum()
+    early = early.query("Accumulated <= @amount")
     esd = esd.loc[esd.index.isin(early.index)]
-    # Process early settlements and add them to the collection
+
     collection = _process_early_settlement(collection, early, date, 'CAN. ANT.', amount)
-    amount -= collection.loc[collection['Type_Collection'] == 'CAN. ANT.', 'Total'].sum()
-    
-    # Apply bonuses for early cancellations
-    esd['Capital'] = 0.0
+    amount -= collection.query("Type_Collection == 'CAN. ANT.'")['Total'].sum()
+
+    # ✅ Apply bonuses for early cancellations
+    esd[['Capital', 'Total']] = 0.0
     esd['Total'] = esd['Interest'] + esd['IVA']
     collection = _process_early_settlement(collection, esd, date, 'BON. CAN. ANT.', amount)
-    
-    # Adjust balance by subtracting the sums of collected amounts grouped by installment ID
-    balance.loc[balance.index.isin(collection['ID_Inst']), ['Capital', 'Interest', 'IVA', 'Total']] -= collection.groupby('ID_Inst')[['Capital', 'Interest', 'IVA', 'Total']].sum()
 
-    # Adjust remaining amount and process any penalties or adjustments
+    # ✅ Adjust balance based on collections
+    collected_totals = collection.groupby('ID_Inst')[['Capital', 'Interest', 'IVA', 'Total']].sum()
+    balance.loc[balance.index.isin(collected_totals.index), ['Capital', 'Interest', 'IVA', 'Total']] -= collected_totals
+
+    # ✅ Process remaining amount for penalties or adjustments
     collection, penalties, installments = _process_remaining_amount(amount, collection, balance, credits, date, id_credits, False, True)
-    amount -= collection.loc[collection['Type_Collection'] == 'PENALTY', 'Total'].sum()
-    
-    # Clean up the collection DataFrame and ensure proper rounding
-    collection = collection.loc[collection['Total'] != 0]
-    for c in ['Capital', 'Interest', 'IVA', 'Total']:
-        collection[c] = collection[c].round(2)
+    amount -= collection.query("Type_Collection == 'PENALTY'")['Total'].sum()
 
-    # Solve rounding discrepancies
+    # ✅ Final cleanup and rounding
+    collection = collection.loc[collection['Total'] != 0].copy()
+    collection[['Capital', 'Interest', 'IVA', 'Total']] = collection[['Capital', 'Interest', 'IVA', 'Total']].round(2)
+
+    # ✅ Solve rounding issues
     collection = _solve_rounding(collection, balance, date, True, id_credits)
 
-    # Save or return the collection
-    if save:  
+    # ✅ Save results if requested
+    if save:
         try:
-            if not (penalties.empty or installments.empty):
+            if not penalties.empty:
                 penalties.to_sql('credits', engine, index=False, if_exists='append')
+            if not installments.empty:
                 installments.to_sql('installments', engine, index=False, if_exists='append')
             collection.to_sql('collection', engine, index=False, if_exists='append')
-        except alIE or myIE:
-            print(f'{not (penalties.empty or installments.empty)} - {(penalties.empty)} - {(installments.empty)}')  
+        except (alIE, myIE) as e:
+            print(f"⚠️ Database Error: {e}")
 
-        
     return collection, penalties, installments
+
 
 
 def reverse(
@@ -515,8 +664,7 @@ def reverse(
         amount: float,
         id_supplier: int,
         date: pd.Timestamp = pd.Timestamp.now(),
-        save: bool = False
-):
+        save: bool = False):
     """
     Processes the reversal of collections for a given identifier.
 
@@ -630,61 +778,67 @@ def read_collection_file(
         type_data: TypeDataCollection) -> pd.DataFrame:
     """
     Reads a collection file (CSV or Excel) and processes the data based on the provided type.
-    
+
     Args:
         path (str): The file path of the collection file to read.
         type_data (TypeDataCollection): The type of data to read (ID_Op, ID_Ext, DNI, CUIL).
-        
+
     Returns:
         pd.DataFrame: A DataFrame grouped by the identifier with the summed 'Amount' values.
-        
+
     Raises:
         FileNotFoundError: If the provided file path does not exist.
-        ValueError: If the file type is unsupported or if the type_data is invalid.
+        ValueError: If the file type is unsupported or if `type_data` is invalid.
     """
-    
-    # Ensure the file path exists
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"The file '{path}' does not exist.")
 
-    # Mapping of the TypeDataCollection values to corresponding header names
+    # ✅ Ensure the file exists before proceeding
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"❌ The file '{path}' does not exist. Please check the path.")
+
+    # ✅ Mapping of TypeDataCollection values to column headers
     index_mapping = {
-        TypeDataCollection.ID_Op: 'ID_Op',       # Map to 'ID_Op' if TypeDataCollection.ID_Op
-        TypeDataCollection.ID_Ext: 'ID_Ext',     # Map to 'ID_Ext' if TypeDataCollection.ID_Ext
-        TypeDataCollection.DNI: 'DNI',           # Map to 'DNI' if TypeDataCollection.DNI
-        TypeDataCollection.CUIL: 'CUIL'          # Map to 'CUIL' if TypeDataCollection.CUIL
+        TypeDataCollection.ID_Op: 'ID_Op',
+        TypeDataCollection.ID_Ext: 'ID_Ext',
+        TypeDataCollection.DNI: 'DNI',
+        TypeDataCollection.CUIL: 'CUIL'
     }
 
-    # Retrieve the header name based on the type_data argument
+    # ✅ Retrieve the column name based on `type_data`
     index = index_mapping.get(type_data)
     if index is None:
-        raise ValueError(f"Unsupported type_data: {type_data}")
-    
-    # Get the file extension to determine how to read the file
+        raise ValueError(f"❌ Unsupported `type_data`: {type_data}. Expected one of {list(index_mapping.keys())}.")
+
+    # ✅ Determine file extension
     _, extension = os.path.splitext(path)
     extension = extension.lower()
 
-    # Read the file based on the extension (CSV or Excel)
+    # ✅ Read the file based on its extension
     if extension == '.csv':
-        # Read CSV file assuming semicolon as separator (adjust as needed)
-        df = pd.read_csv(path, sep=";", header=None)
+        df = pd.read_csv(path, sep=None, engine='python', header=None)  # Auto-detect delimiter
     elif extension == '.xlsx':
-        # Read Excel file
         df = pd.read_excel(path, header=None)
     else:
-        # Raise an error if the file extension is not supported
-        raise ValueError(f"Unsupported file type: '{extension}'.")
-    
-    # Assign appropriate column names: identifier (based on type_data) and 'Amount'
+        raise ValueError(f"❌ Unsupported file type: '{extension}'. Only CSV and Excel files are allowed.")
+
+    # ✅ Ensure DataFrame is not empty
+    if df.empty:
+        return pd.DataFrame(columns=[index, 'Amount'])
+
+    # ✅ Assign column names dynamically
     df.columns = [index, 'Amount']
 
-    # Ensure the 'Amount' column is numeric for proper calculations
-    df['Amount'] = df['Amount'].astype(float)
+    # ✅ Ensure 'Amount' is numeric, coercing errors to NaN
+    df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce')
 
-    # Group the DataFrame by the identifier (index) and sum the 'Amount' values
-    df = pd.DataFrame(df.groupby(index)['Amount'].sum())
-    
-    # Return the processed DataFrame
+    # ✅ Remove rows with NaN values in the 'Amount' column
+    df = df.dropna(subset=['Amount'])
+
+    # ✅ Convert identifier column to string to prevent grouping issues
+    df[index] = df[index].astype(str)
+
+    # ✅ Group by identifier and sum amounts
+    df = df.groupby(index, as_index=True)['Amount'].sum().reset_index()
+
     return df
 
 
@@ -825,113 +979,138 @@ def massive_early_collection(
         IntegrityError: If a database integrity constraint is violated during save.
     """
 
-    # Read the input file and process it into a DataFrame
+    # ✅ Validate file existence
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"File '{path}' not found. Please check the path and try again.")
+
+    # ✅ Read and process input file
     df = read_collection_file(path, type_data)
 
-    # Print formatted DataFrame for verification/debugging
+    # ✅ Print formatted DataFrame for debugging
     print(df.map('${:,.2f}'.format))
 
-    # Initialize empty lists to collect the resulting DataFrames
-    collection_list = []
-    penalty_list = []
-    inst_list = []
+    # ✅ Initialize empty lists for collected data
+    collection_list, penalty_list, inst_list = [], [], []
 
-    # Initialize an error DataFrame to capture problematic records
+    # ✅ Initialize error DataFrame
     error = pd.DataFrame(columns=['Amount'])
     error.index.name = df.index.name
 
-    # Iterate through the input DataFrame index
+    # ✅ Load `credits` once to avoid redundant queries in loop
+    credits = pd.read_sql('credits', engine, index_col='ID')
+
+    # ✅ Process early collections for each record
     for i in df.index:
         try:
-            # Process early collection logic for each record
-            collections, penalties, installments = collection_w_early_cancel(type_data, i, df.loc[i, 'Amount'], id_supplier, date)
+            collections, penalties, installments = collection_w_early_cancel(
+                type_data, i, df.at[i, 'Amount'], id_supplier, date
+            )
 
-            # Append the results to the corresponding lists
-            collection_list.append(collections)
-            penalty_list.append(penalties)
-            inst_list.append(installments)
+            # Append results if they contain data
+            if not collections.empty:
+                collection_list.append(collections)
+            if not penalties.empty:
+                penalty_list.append(penalties)
+            if not installments.empty:
+                inst_list.append(installments)
+
         except IdentifierError:
-            # Capture errors in processing and store in the error DataFrame
-            error.loc[i, 'Amount'] = df.loc[i, 'Amount']
+            error.at[i, 'Amount'] = df.at[i, 'Amount']
 
-    # Combine the collected DataFrames into final DataFrames
+    # ✅ Combine collected DataFrames
+    collections = pd.concat(collection_list, ignore_index=True) if collection_list else pd.DataFrame()
     penalties = pd.concat(penalty_list, ignore_index=True) if penalty_list else pd.DataFrame()
     installments = pd.concat(inst_list, ignore_index=True) if inst_list else pd.DataFrame()
-    collections = pd.concat(collection_list, ignore_index=True) if collection_list else pd.DataFrame(columns=['ID_Inst', 'D_Emission', 'Type_Collection', 'Capital', 'Interest', 'IVA', 'Total'])
 
-    # Handle special cases for installments and penalties
+    # ✅ Ensure valid IDs for installments and penalties
     if not installments.empty:
-        new_penalty = collections.loc[collections['Type_Collection'] == 'PENALTY', 'ID_Inst'].copy()
-        collections.loc[collections['Type_Collection'] == 'PENALTY', 'ID_Inst'] = [new_penalty.max() + i for i in range(len(new_penalty))]
-        installments['ID_Op'] = [pd.read_sql('credits', engine, index_col='ID').index.max() + i + 1 for i in range(len(installments))]
+        new_penalty_ids = collections.query("Type_Collection == 'PENALTY'")['ID_Inst'].copy()
+        if not new_penalty_ids.empty:
+            collections.loc[new_penalty_ids.index, 'ID_Inst'] = range(
+                new_penalty_ids.max() + 1, new_penalty_ids.max() + 1 + len(new_penalty_ids)
+            )
 
-    # Set index names for the resulting DataFrames
-    collections.index.name = 'ID'
-    penalties.index.name = 'ID'
-    installments.index.name = 'ID'
+        # ✅ Assign new credit IDs to installments
+        last_credit_id = credits.index.max() if not credits.empty else 0
+        installments['ID_Op'] = range(last_credit_id + 1, last_credit_id + 1 + len(installments))
 
-    # Round numerical columns for better precision
-    for c in ['Capital', 'Interest', 'IVA', 'Total']:
-        collections[c] = collections[c].round(2)
-        installments[c] = installments[c].round(2)
+    # ✅ Set index names for consistency
+    collections.index.name, penalties.index.name, installments.index.name = 'ID', 'ID', 'ID'
 
-    collections = collections.loc[~((collections['Capital'] == 0.0) &\
-                                    (collections['Interest'] == 0.0) &\
-                                    (collections['IVA'] == 0.0) &\
-                                    (collections['Total'] == 0.0))]
+    # ✅ Round numerical columns for precision
+    for col in ['Capital', 'Interest', 'IVA', 'Total']:
+        if not collections.empty:
+            collections[col] = collections[col].round(2)
+        if not installments.empty:
+            installments[col] = installments[col].round(2)
 
-    # Save the resulting DataFrames to the database if specified
+    # ✅ Remove zero-value rows from collections
+    collections = collections.query("Capital != 0 or Interest != 0 or IVA != 0 or Total != 0")
+
+    # ✅ Save data to the database if required
     if save:
         try:
             if penalties.empty and installments.empty:
-                # Save collections only if no penalties or installments exist
                 collections.to_sql('collection', engine, index=False, if_exists='append')
             else:
-                # Save penalties, installments, and collections
                 penalties.to_sql('credits', engine, index=False, if_exists='append')
                 installments.to_sql('installments', engine, index=False, if_exists='append')
                 collections.to_sql('collection', engine, index=False, if_exists='append')
 
-        except IntegrityError:
-            # Handle database integrity errors and return current state
-            print(f"IntegrityError.\n Check the error DataFrame.")
+        except IntegrityError as e:
+            print(f"⚠️ IntegrityError: {e}\nCheck the error DataFrame.")
             return df, collections, error, penalties, installments
 
-    # Return the processed DataFrames and the error DataFrame
+    # ✅ Return processed DataFrames
     return collections, penalties, installments, error
 
 
-def calculate_accumulated_balance(id_supplier: int, date: pd.Timestamp) -> pd.DataFrame:
+def calculate_accumulated_balance(id_supplier: int, date: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Calculates the accumulated balance of credits with resource type for a supplier up to a given date.
 
     Parameters:
-    id_supplier (int): The ID of the supplier company.
-    date (pd.Timestamp): The cutoff date for filtering credit balances.
+        id_supplier (int): The ID of the supplier company.
+        date (pd.Timestamp): The cutoff date for filtering credit balances.
 
     Returns:
-    pd.DataFrame: A DataFrame with the daily total balance and accumulated balance up to the given date.
+        tuple: 
+            - pd.DataFrame: Filtered balance DataFrame containing credit balances.
+            - pd.DataFrame: DataFrame with daily total balance and accumulated balance up to the given date.
     """
-    # Retrieve the supplier's advance amount
-    companies = pd.read_sql('companies', engine, index_col='ID')
-    advance = companies.loc[id_supplier, 'Advance']
 
-    # Fetch the credit balance and related tables
+    # ✅ Retrieve supplier's advance amount safely
+    companies = pd.read_sql('companies', engine, index_col='ID')
+
+    if id_supplier not in companies.index:
+        raise ValueError(f"Supplier ID {id_supplier} not found in database.")
+
+    advance = companies.at[id_supplier, 'Advance']
+
+    # ✅ Fetch credit balance and related tables
     balance = credits_balance()  # Assumes this function fetches balance data
     credits = pd.read_sql('credits', engine, index_col='ID')
     pp = pd.read_sql('portfolio_purchases', engine, index_col='ID')
 
-    # Filter credits to include only those with resource type and due date before the cutoff date
-    resource_credits = credits.loc[credits['ID_Purch'].isin(pp.loc[pp['Resource'] == 1].index.values)].index.values
-    filter_1 = balance['ID_Op'].isin(resource_credits)
-    filter_2 = balance['D_Due'] <= date
-    balance = balance.loc[filter_1 & filter_2]
+    # ✅ Filter credits with resource type and due date before the cutoff date
+    resource_credits = credits.query("ID_Purch in @pp.query('Resource == 1').index").index
 
-    # Group by due date and sum the total amounts
-    balance_acum = pd.DataFrame(balance.groupby('D_Due')['Total'].sum())
-    balance_acum = balance_acum.loc[balance_acum['Total'] != 0.0]
+    if resource_credits.empty:
+        return balance.iloc[0:0].copy(), pd.DataFrame(columns=['Total', 'Accumulated'])
 
-    # Calculate the accumulated balance
+    # ✅ Apply filtering to balance DataFrame
+    balance = balance.query("ID_Op in @resource_credits and D_Due <= @date").copy()
+
+    if balance.empty:
+        return balance, pd.DataFrame(columns=['Total', 'Accumulated'])
+
+    # ✅ Group by due date and sum total amounts
+    balance_acum = balance.groupby('D_Due', as_index=True)['Total'].sum().reset_index()
+
+    # ✅ Ensure balance_acum contains only non-zero totals
+    balance_acum = balance_acum.query("Total != 0.0").copy()
+
+    # ✅ Calculate accumulated balance
     balance_acum['Accumulated'] = balance_acum['Total'].cumsum()
 
     return balance, balance_acum
@@ -941,105 +1120,115 @@ def resource_collection(
     id_supplier: int,
     amount: float,
     date: pd.Timestamp = pd.Timestamp.now().strftime('%Y/%m/%d'),
-    save: bool = False):
+    save: bool = False) -> pd.DataFrame:
     """
     Manages the resource collection process for a supplier, updating the advance balance and recording collections.
 
     Parameters:
-    id_supplier (int): The ID of the supplier company.
-    amount (float): The amount available for collection.
-    date (pd.Timestamp): The date of the collection (default is today).
-    save (bool): Whether to save the updates and collection to the database.
+        id_supplier (int): The ID of the supplier company.
+        amount (float): The amount available for collection.
+        date (pd.Timestamp): The date of the collection (default is today).
+        save (bool): Whether to save the updates and collection to the database.
 
     Returns:
-    pd.DataFrame: A DataFrame with the details of the collections processed.
+        pd.DataFrame: A DataFrame with the details of the collections processed.
     """
-    # Verify if the supplier exists in the database
-    companies = pd.read_sql('companies', engine, index_col='ID')
-    if id_supplier not in companies.index:
-        raise ValueError(f"{id_supplier} is not a company in the database.")
-    else:
-        # Confirm with the user before proceeding
-        if input(f"The customer is {companies.loc[id_supplier, 'Social_Reason']}, shall we continue? (Yes/No)").title() != 'Yes':
-            return print('Process cancelled.')
 
-    # Adjust the collection amount based on the supplier's advance balance
-    amount += companies.loc[id_supplier, 'Advance']
+    # ✅ Load supplier data
+    companies = pd.read_sql(f"SELECT * FROM companies WHERE ID = {id_supplier}", engine, index_col="ID")
+
+    # ✅ Verify supplier existence
+    if companies.empty:
+        raise ValueError(f"❌ Supplier ID {id_supplier} does not exist in the database.")
+
+    supplier_name = companies.loc[id_supplier, "Social_Reason"]
+
+    # ✅ Confirm action with the user
+    confirmation = input(f"The customer is {supplier_name}. Shall we continue? (Yes/No) ").strip().lower()
+    if confirmation != "yes":
+        print("❌ Process cancelled.")
+        return pd.DataFrame()
+
+    # ✅ Adjust the amount using the supplier's advance balance
+    amount += companies.loc[id_supplier, "Advance"]
+
+    # ✅ Fetch accumulated balances
     balance, balance_acum = calculate_accumulated_balance(id_supplier, date)
 
-    # Fetch system settings and determine the cutoff for filtering accumulated balances
-    setts = pd.read_sql('settings', engine, index_col='ID')
-    filter = (balance_acum['Accumulated'] <= amount) | (abs(balance_acum['Accumulated'] - amount) <= float(setts.loc[2, 'Value']))
-    amount -= balance_acum.loc[filter, 'Total'].sum()
-    balance = balance.loc[balance['D_Due'].isin(balance_acum.loc[filter].index)]
+    # ✅ Fetch system settings and determine cutoff
+    setts = pd.read_sql("SELECT ID, Value FROM settings WHERE ID = 2", engine, index_col="ID")
+    tolerance_value = float(setts.loc[2, "Value"])
 
-    # Initialize a DataFrame to record collections
-    collections = pd.DataFrame(columns=['ID_Inst', 'D_Emission', 'Type_Collection', 'Capital', 'Interest', 'IVA', 'Total'])
-    for i, j in enumerate(balance.index):
+    # ✅ Filter accumulated balances based on conditions
+    filter_condition = (balance_acum["Accumulated"] <= amount) | (abs(balance_acum["Accumulated"] - amount) <= tolerance_value)
+    amount -= balance_acum.loc[filter_condition, "Total"].sum()
+    balance = balance.loc[balance['D_Due'].isin(balance_acum.loc[filter_condition].index)]
+
+    # ✅ Initialize collections DataFrame
+    collections = pd.DataFrame(columns=["ID_Inst", "D_Emission", "Type_Collection", "Capital", "Interest", "IVA", "Total"])
+
+    # ✅ Process each balance entry
+    for i, (index, row) in enumerate(balance.iterrows()):
         collections.loc[i] = {
-            'ID_Inst': j,
-            'D_Emission': date,
-            'Type_Collection': 'RECURSO',
-            'Capital': balance.loc[j, 'Capital'],
-            'Interest': balance.loc[j, 'Interest'],
-            'IVA': balance.loc[j, 'IVA'],
-            'Total': balance.loc[j, 'Total']
+            "ID_Inst": index,
+            "D_Emission": date,
+            "Type_Collection": "RECURSO",
+            "Capital": row["Capital"],
+            "Interest": row["Interest"],
+            "IVA": row["IVA"],
+            "Total": row["Total"]
         }
 
-    # Save changes to the database if specified
+    # ✅ Save to database if required
     if save:
-        # Update the supplier's advance balance
-        stmt = update(Company).where(Company.ID == id_supplier).values(Advance=amount)
-        with Session(engine) as session:
-            session.execute(stmt)
-            session.commit()
+        try:
+            # ✅ Update supplier's advance balance
+            stmt = update(Company).where(Company.ID == id_supplier).values(Advance=amount)
+            with Session(engine) as session:
+                session.execute(stmt)
+                session.commit()
 
-        # Save collections to the database
-        collections.to_sql('collection', engine, index=False, if_exists='append')
+            # ✅ Save collections to the database
+            collections.to_sql("collection", engine, index=False, if_exists="append")
+
+            print(f"✅ Resource collection for supplier {supplier_name} successfully recorded.")
+        except Exception as e:
+            print(f"❌ Error saving resource collection: {e}")
 
     return collections
 
 
-def delete_collection_by_id(collection_id):
+def delete_collection_by_id(collection_id: int) -> None:
     """
     Deletes a row from the 'Collection' table based on the provided ID.
 
     Args:
         collection_id (int): The ID of the collection to be deleted.
 
-    Description:
-        This function queries the 'Collection' table to find a row matching the 
-        given ID. If the row exists, it marks it for deletion and commits the changes 
-        to the database. If the row is not found, it notifies the user. In case of 
-        an error, it rolls back the transaction to maintain database integrity.
-
     Raises:
-        Exception: If any error occurs during the deletion process.
+        SQLAlchemyError: If any database-related error occurs during the deletion process.
 
     Returns:
         None
     """
-    # Initialize a session from the sessionmaker
+
     Session = sessionmaker(bind=engine)
-    session = Session()
 
     try:
-        # Query the Collection table to find the row with the specified ID
-        user_to_delete = session.query(Collection).filter_by(id=collection_id).first()
+        with Session() as session:
+            # Attempt to retrieve the collection entry
+            collection_entry = session.query(Collection).filter_by(id=collection_id).first()
 
-        if user_to_delete:
-            # Mark the row for deletion
-            session.delete(user_to_delete)
-            # Commit the transaction to persist changes
-            session.commit()
-            print(f"User with ID {collection_id} has been deleted.")
-        else:
-            # Notify if the row is not found
-            print(f"No user found with ID {collection_id}.")
+            if collection_entry:
+                # Delete and commit
+                session.delete(collection_entry)
+                session.commit()
+                print(f"✅ Collection record with ID {collection_id} successfully deleted.")
+            else:
+                print(f"⚠️ No collection record found with ID {collection_id}.")
+    
+    except SQLAlchemyError as e:
+        print(f"❌ Database error while deleting collection ID {collection_id}: {e}")
+    
     except Exception as e:
-        # Rollback the transaction in case of an error
-        session.rollback()
-        print(f"An error occurred: {e}")
-    finally:
-        # Close the session to free up resources
-        session.close()
+        print(f"❌ Unexpected error: {e}")

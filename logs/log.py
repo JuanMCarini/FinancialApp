@@ -154,35 +154,23 @@ for path, supplier_id, business_plan_id, tna, date, model in portfolios:
         model=model
     )
 
-
 # Process early resource collections before the specified date
 balance = credits_balance()
-fecha = pd.Timestamp("2024-12-01")
+fecha = pd.Timestamp("2025-02-24")
 
 # Collect all amounts due before the specified date
 early_balance = balance[balance["D_Due"] < fecha].groupby("D_Due")["Total"].sum()
+early_balance = early_balance[early_balance != 0]
 
 # Process each due date
 for due_date, total_amount in early_balance.items():
     resource_collection(2, total_amount, date=due_date, save=True)
     print(f"✅ Processed resource collection for due date {due_date}, Amount: {total_amount}")
 
-# Process final resource collection for amounts due up to 2024-12-30
-balance = credits_balance()
-fecha_final = pd.Timestamp("2024-12-30")
-
-# Total sum of all amounts due up to `fecha_final`
-total_final = balance.loc[balance["D_Due"] <= fecha_final, "Total"].sum()
-
-# Process the final resource collection
-resource_collection(2, total_final, date=fecha_final, save=True)
-print(f"✅ Final resource collection processed for {fecha_final}, Total Amount: {total_final}")
-
 # Confirm successful migration
 print("✅ Onoyen credit portfolio successfully migrated.")
 
-'''
-print('Comenzamos a migar la cartera de AMUF.')
+print("We are starting to migrate AMUF's portfolio.")
 
 class MaritalStatus(Enum):
     SINGLE = 'SINGLE'
@@ -191,89 +179,125 @@ class MaritalStatus(Enum):
     WIDOW = 'WIDOW'
     DIVORCE = 'DIVORCE'
 
+# ✅ Load and process the credit report
+date = "25-03-01"
+df = pd.read_excel(f"inputs/Reporte - Inv. Créditos - {date}.xlsx")
 
-df = pd.read_excel('inputs/Reporte - Inv. Créditos - 24-12-31.xlsx')
-df['ID'] = df['Clave Externa'].str.lstrip('CH_')
-df.set_index('ID', inplace=True)
-df.dropna(axis=1, how='all', inplace=True)
-df = df[df['Fondeador'] == 'NEOCREDIT']
-unique_columns = [col for col in df.columns if len(df[col].unique())<=1]
-df.drop(columns=unique_columns, inplace=True)
-df.drop(columns=['Id. Op.', 'Clave Externa', 'Sit. Op.', 'Nro Prestamo', 'Id. Cliente', 'Id. Org.', 'Org.', 'Clave Org.', 'Hab. 1er Vto', 'F. Ult. Vto', 'Monto', 'Val. Cuota del Periodo', 'Val. Cuota S/IVA del Periodo', 'Cant. Cuotas Cob.', 'Imp. Total Cob.', 'Cap. Cuotas Cob.', 'Int. Cuotas Cob.', 'IVA Cuotas Cob.', 'Cant. Cuotas Imp. (V/aV)', 'Imp. Cuotas Imp. (V/aV)', 'Cap. Cuotas Imp. (V/aV)', 'Int. Cuotas Imp. (V/aV)', 'Iva Cuotas Imp. (V/aV)', 'Cant. Cuotas Imp. Vencidas', 'Imp. Cuotas Imp. Vencidas', 'Cap. Cuotas Imp. Vencidas', 'Int. Cuotas Imp. Vencidas', 'IVA Cuotas Imp. Vencidas', 'Cant. Cuotas Imp. a Vencer', 'Imp. Cuotas Imp. a Vencer', 'Cap. Cuotas Imp. a Vencer', 'Int. Cuotas Imp. a Vencer', 'Iva. Cuotas Imp. a Vencer', 'F. Vto ult. Cuota Cob. Completa', 'F. ult. Vto Operado', 'Nro 1er Cuota Imp.', 'F. Vto 1er Cuota Imp.', 'F. Cob. 4 Meses Atras', 'F. Cob. 3 Meses Atras', 'F. Cob. 2 Meses Atras', 'F. Cob. 1 Meses Atras', 'Cob. 4 Meses Atras', 'Cob. 3 Meses Atras', 'Cob. 2 Meses Atras', 'Cob. 1 Meses Atras', 'F. ult. Cob.', 'Imp. ult. Cob.', 'Dias de Mora', 'Dias dde F. ult. Cob.', 'Tel. Lab.'], inplace=True)
+# ✅ Clean and structure data
+df["ID"] = df["Clave Externa"].str.lstrip("CH_")
+df.set_index("ID", inplace=True)
+df.dropna(axis=1, how="all", inplace=True)
+df = df.query("Fondeador == 'NEOCREDIT'")
 
+# ✅ Remove columns with only one unique value
+df = df.loc[:, df.nunique() > 1]
+
+# ✅ Drop unnecessary columns
+columns_to_drop = [
+    "Id. Op.", "Clave Externa", "Sit. Op.", "Nro Prestamo", "Id. Cliente", "Id. Org.", "Org.", "Clave Org.",
+    "Hab. 1er Vto", "F. Ult. Vto", "Monto", "Val. Cuota del Periodo", "Val. Cuota S/IVA del Periodo",
+    "Cant. Cuotas Cob.", "Imp. Total Cob.", "Cap. Cuotas Cob.", "Int. Cuotas Cob.", "IVA Cuotas Cob.",
+    "Cant. Cuotas Imp. (V/aV)", "Imp. Cuotas Imp. (V/aV)", "Cap. Cuotas Imp. (V/aV)", "Int. Cuotas Imp. (V/aV)", 
+    "Iva Cuotas Imp. (V/aV)", "Cant. Cuotas Imp. Vencidas", "Imp. Cuotas Imp. Vencidas", "Cap. Cuotas Imp. Vencidas", 
+    "Int. Cuotas Imp. Vencidas", "IVA Cuotas Imp. Vencidas", "Cant. Cuotas Imp. a Vencer", "Imp. Cuotas Imp. a Vencer", 
+    "Cap. Cuotas Imp. a Vencer", "Int. Cuotas Imp. a Vencer", "Iva. Cuotas Imp. a Vencer", "F. Vto ult. Cuota Cob. Completa", 
+    "F. ult. Vto Operado", "Nro 1er Cuota Imp.", "F. Vto 1er Cuota Imp.", "F. Cob. 4 Meses Atras", "F. Cob. 3 Meses Atras", 
+    "F. Cob. 2 Meses Atras", "F. Cob. 1 Meses Atras", "Cob. 4 Meses Atras", "Cob. 3 Meses Atras", "Cob. 2 Meses Atras", 
+    "Cob. 1 Meses Atras", "F. ult. Cob.", "Imp. ult. Cob.", "Dias de Mora", "Dias dde F. ult. Cob.", "Tel. Lab."
+]
+df.drop(columns=columns_to_drop, inplace=True)
+
+# ✅ Rename columns
 df.rename(columns={
-    'F. Liq.': 'Date_Settlement',
-    'F. 1er Vto': 'D_F_Due',
-    'TEM': 'TEM_W_IVA',
-    'Cap. Solicitado': 'Cap_Requested',
-    'Cap. Otrogado': 'Cap_Grant',
-    'Cant. Cuotas': 'N_Inst',
-    'Val. Cuota': 'V_Inst',
-    'Nro Doc.': 'DNI',
-    'Apellido': 'Last_Name',
-    'Nombre': 'Name',
-    'Edad al Alta': 'Age_at_Discharge',
-    'Provincia': 'Province',
-    'Domicilio': 'Street',
-    'Localidad': 'Locality',
-    'Tel. Predeterminado': 'Telephone',
-    'Sueldo Liquido': 'Salary',
-    'CBU Cliente': 'CBU',
-    'Línea': 'Collection_Entity',
-    'Empleador': 'Employer',
-    'CUIT': 'CUIT_Employer'
+    "F. Liq.": "Date_Settlement",
+    "F. 1er Vto": "D_F_Due",
+    "TEM": "TEM_W_IVA",
+    "Cap. Solicitado": "Cap_Requested",
+    "Cap. Otrogado": "Cap_Grant",
+    "Cant. Cuotas": "N_Inst",
+    "Val. Cuota": "V_Inst",
+    "Nro Doc.": "DNI",
+    "Apellido": "Last_Name",
+    "Nombre": "Name",
+    "Edad al Alta": "Age_at_Discharge",
+    "Provincia": "Province",
+    "Domicilio": "Street",
+    "Localidad": "Locality",
+    "Tel. Predeterminado": "Telephone",
+    "Sueldo Liquido": "Salary",
+    "CBU Cliente": "CBU",
+    "Línea": "Collection_Entity",
+    "Empleador": "Employer",
+    "CUIT": "CUIT_Employer"
 }, inplace=True)
 
-df['First_Inst_Purch'] = 1
+df["First_Inst_Purch"] = 1
 
-for c in ['Date_Birth', 'Gender', 'Marital_Status', 'Nro', 'CP', 'Email', 'Country', 'Feature', 'Seniority', 'Dependence', 'Empl_Prov', 'Empl_Loc', 'Empl_Adress']:
-    df[c] = pd.NA
+# ✅ Initialize missing columns
+missing_columns = [
+    "Date_Birth", "Gender", "Marital_Status", "Nro", "CP", "Email", "Country", "Feature",
+    "Seniority", "Dependence", "Empl_Prov", "Empl_Loc", "Empl_Adress"
+]
+df[missing_columns] = pd.NA
 
+# ✅ Reorder columns
+df = df[
+    ["CUIL", "DNI", "Last_Name", "Name", "Date_Birth", "Gender", "Marital_Status", "Age_at_Discharge",
+     "Country", "Province", "Locality", "Street", "Nro", "CP", "Feature", "Email", "Telephone",
+     "Seniority", "Salary", "CBU", "Collection_Entity", "Employer", "Dependence", "CUIT_Employer",
+     "Empl_Prov", "Empl_Loc", "Empl_Adress", "Date_Settlement", "Cap_Requested", "Cap_Grant",
+     "N_Inst", "First_Inst_Purch", "TEM_W_IVA", "V_Inst", "D_F_Due"]
+]
 
-df = df[['CUIL', 'DNI', 'Last_Name', 'Name', 'Date_Birth', 'Gender', 'Marital_Status', 'Age_at_Discharge', 'Country', 'Province', 'Locality', 'Street', 'Nro', 'CP', 'Feature', 'Email', 'Telephone', 'Seniority', 'Salary', 'CBU', 'Collection_Entity', 'Employer', 'Dependence', 'CUIT_Employer', 'Empl_Prov', 'Empl_Loc', 'Empl_Adress', 'Date_Settlement', 'Cap_Requested', 'Cap_Grant', 'N_Inst', 'First_Inst_Purch', 'TEM_W_IVA', 'V_Inst', 'D_F_Due']]
+# ✅ Load and process client data
+clients = pd.read_excel(f'inputs/Clientes - {date}.xlsx', index_col='C.U.I.L.')
 
-clients = pd.read_excel('inputs/Clientes - 24-12-31.xlsx', index_col='C.U.I.L.')
+# ✅ Rename client columns
 clients.rename(columns={
-    'FECHA NACIMIENTO': 'Date_Birth',
-    'SEXO': 'Gender',
-    'ESTADO CIVIL': 'Marital_Status',
-    'NACIONALIDAD': 'Country',
-    'E-MAIL': 'Email',
-    'CALLE': 'Street',
-    'CALLE NÚMERO': 'Nro',
-    'LOCALIDAD': 'Locality',
-    'CÓDIGO POSTAL': 'CP',
-    'PROVINCIA': 'Province'
+    "FECHA NACIMIENTO": "Date_Birth",
+    "SEXO": "Gender",
+    "ESTADO CIVIL": "Marital_Status",
+    "NACIONALIDAD": "Country",
+    "E-MAIL": "Email",
+    "CALLE": "Street",
+    "CALLE NÚMERO": "Nro",
+    "LOCALIDAD": "Locality",
+    "CÓDIGO POSTAL": "CP",
+    "PROVINCIA": "Province"
 }, inplace=True)
 
-clients = clients[['Date_Birth', 'Gender', 'Marital_Status', 'Country', 'Nro', 'CP', 'Email']]
+clients = clients[["Date_Birth", "Gender", "Marital_Status", "Country", "Nro", "CP", "Email"]]
 
+# ✅ Map marital status values
 marital_status_map = {
-    'SOLTERO/A':    MaritalStatus.SINGLE,
-    'CONCUBINATO':  MaritalStatus.COHABITATION,
-    'CASADO/A':     MaritalStatus.MARRIED,
-    'VIUDO/A':      MaritalStatus.WIDOW,
-    'DIVORCIADO/A': MaritalStatus.DIVORCE
+    "SOLTERO/A": MaritalStatus.SINGLE,
+    "CONCUBINATO": MaritalStatus.COHABITATION,
+    "CASADO/A": MaritalStatus.MARRIED,
+    "VIUDO/A": MaritalStatus.WIDOW,
+    "DIVORCIADO/A": MaritalStatus.DIVORCE
 }
+clients["Marital_Status"] = clients["Marital_Status"].replace(marital_status_map)
 
-# Now replace the values in the 'Marital_Status' column
-clients['Marital_Status'] = clients['Marital_Status'].replace(marital_status_map)
-
-
+# ✅ Merge client data with credit data
 df = df.merge(clients, left_on='CUIL', right_index=True, how='inner')
 
-# Rename columns ending with '_y' to remove the '_y' suffix
-df.rename(columns=lambda x: x.rstrip('_y') if x.endswith('_y') else x, inplace=True)
-df.drop(columns=[col for col in df.columns if '_x' in col], inplace=True)
-df.rename(columns={'Countr': 'Country'}, inplace=True)
+# ✅ Clean column names after merge
+df.rename(columns=lambda x: x.rstrip("_y") if x.endswith("_y") else x, inplace=True)
+df.drop(columns=[col for col in df.columns if "_x" in col], inplace=True)
+
+# ✅ Ensure "Country" is correctly named
+df.rename(columns={"Countr": "Country"}, inplace=True)
 
 df = df[['CUIL', 'DNI', 'Last_Name', 'Name', 'Date_Birth', 'Gender', 'Marital_Status', 'Age_at_Discharge', 'Country', 'Province', 'Locality', 'Street', 'Nro', 'CP', 'Feature', 'Email', 'Telephone', 'Seniority', 'Salary', 'CBU', 'Collection_Entity', 'Employer', 'Dependence', 'CUIT_Employer', 'Empl_Prov', 'Empl_Loc', 'Empl_Adress', 'Date_Settlement', 'Cap_Requested', 'Cap_Grant', 'N_Inst', 'First_Inst_Purch', 'TEM_W_IVA', 'V_Inst', 'D_F_Due']]
 
-df['Empl_Prov'] = df['Empl_Prov'].fillna(df['Province'], axis=0)
-df['Empl_Loc'] = df['Empl_Prov'].fillna(df['Locality'], axis=0)
-df['TEM_W_IVA'] /= 100
+# ✅ Final adjustments
+df["Empl_Prov"] = df["Empl_Prov"].combine_first(df["Province"])
+df["Empl_Loc"] = df["Empl_Loc"].combine_first(df["Locality"])
+df["TEM_W_IVA"] /= 100
 
+# ✅ Load business plan data
 bp = pd.read_sql('business_plan', engine, index_col='ID')
+
 for i in range(3,6):
     path = f'outputs/Cartera - AMUF - 24-12-30 - {i}.xlsx'
     if i == 3:
@@ -286,48 +310,68 @@ for i in range(3,6):
         df.loc[df['Date_Settlement'] > bp.loc[i, 'Date']].to_excel(path, index=True)
     portfolio_buyer(path, 3, i, 0.0, False, True, False, save=True)
 
-print('Migramos los créditos, y empezamos a migrar las cobranzas.')
+print("✅ Credit migration completed. Now starting collections migration.")
+'''
+# ✅ Load collections report
+coll = pd.read_excel(f'inputs/Reporte - Cobranzas - {date}.xlsx')
+coll = coll.query("Fondeador != 'ONOYEN'")
+coll.drop(columns=["GS", "PU"], inplace=True)
 
-coll = pd.read_excel('inputs/Reporte - Cobranzas - 24-12-31.xlsx')
-coll = coll[coll['Fondeador'] != 'ONOYEN']
-coll.drop(columns=['GS', 'PU'], inplace=True)
+# ✅ Load investment report
+inv = pd.read_excel(f'inputs/Reporte - Inv. Créditos - {date}.xlsx', index_col="Id. Op.")
+inv = inv.query("Fondeador != 'ONOYEN'")
 
-inv = pd.read_excel('inputs/Reporte - Inv. Créditos - 24-12-31.xlsx', index_col='Id. Op.')
-inv = inv.loc[inv['Fondeador'] != 'ONOYEN']
+# ✅ Load existing credits from the database
+credits = pd.read_sql("SELECT * FROM credits", engine, index_col="ID")
 
-credits = pd.read_sql('credits', engine, index_col='ID')
-coll['ID_Externo'] = coll['Crédito'].apply(lambda x: inv.loc[x, 'Clave Externa'].strip("CH_") if x in inv.index else None)
+# ✅ Map external IDs
+coll["ID_External"] = coll["Crédito"].map(lambda x: inv.loc[x, "Clave Externa"].strip("CH_") if x in inv.index else None)
 
-coll['ID'] = coll['ID_Externo'].apply(lambda x: credits.loc[credits['ID_External'] == x].index.values[0] if x in credits['ID_External'].values else None)
+# ✅ Map internal IDs
+coll["ID"] = coll["ID_External"].map(
+    lambda x: credits.loc[credits["ID_External"] == x].index[0] 
+    if x in credits["ID_External"].values and not credits.loc[credits["ID_External"] == x].empty 
+    else None
+)
 
-# Replace NaN values with a placeholder, e.g., -1
-coll['ID_Externo'] = coll['ID_Externo'].fillna(-1)
-coll['ID'] = coll['ID'].fillna(-1)
+# ✅ Replace NaN values with placeholder (-1), then convert to integer safely
+coll[["ID_External", "ID"]] = coll[["ID_External", "ID"]].fillna(-1).astype(int, errors="ignore")
+coll.replace({"ID_External": -1, "ID": -1}, None, inplace=True)
 
-# Convert to integers
-coll['ID'] = coll['ID'].astype(int)
-coll['ID_Externo'] = coll['ID_Externo'].astype(int)
+# ✅ Standardize "Tipo Cobranza" values
+coll["Tipo Cobranza"] = coll["Tipo Cobranza"].replace("ANTICIPO", "COBRANZA")
+coll["Tipo Cobranza"] = coll.apply(lambda row: "PENALTY" if row["Línea"] == "PENALTY" else row["Tipo Cobranza"], axis=1)
 
-coll[['ID', 'ID_Externo']] = coll[['ID', 'ID_Externo']].replace(-1, None)
-coll['Tipo Cobranza'] = coll['Tipo Cobranza'].replace('ANTICIPO', 'COBRANZA')
-coll['Tipo Cobranza'] = coll.apply(lambda row: row['Tipo Cobranza'] if row['Línea'] != 'PENALTY' else 'PENALTY', axis=1)
+# ✅ Ensure correct indexing for missing 'PENALTY' IDs
+penalty_index = coll.index[coll["ID"].isna() & (coll["Tipo Cobranza"] == "PENALTY")]
 
-missing_ids = coll.loc[(coll['ID'].isna()) & (coll['Tipo Cobranza'] == 'PENALTY')]
-coll.loc[coll['ID'].isna() & (coll['Tipo Cobranza'] == 'PENALTY'), 'ID'] = [credits.index.max() + i + 1 for i in range(len(missing_ids))]
+# ✅ Assign unique IDs only to the required rows
+coll.loc[penalty_index, "ID"] = range(credits.index.max() + 1, credits.index.max() + 1 + len(penalty_index))
 
+# ✅ Organize and group collection data
+coll_org_id = coll.dropna(subset=["ID"]).copy()
+coll = coll.groupby(["Emisión", "CUIL", "ID", "Tipo Cobranza"])[["CA", "IN", "IV", "TOTAL"]].sum().reset_index()
+coll = coll.sort_values(by=["Emisión", "ID"])
 
-coll_org_id = coll.loc[~coll['ID'].isna()].copy()
-coll = coll.groupby(['Emisión', 'CUIL', 'ID', 'Tipo Cobranza'])[['CA', 'IN', 'IV', 'TOTAL']].sum().reset_index().sort_values(by=['Emisión', 'ID'])
+# ✅ Process penalties
+penalties = coll.loc[coll['Tipo Cobranza'] == 'PENALTY'].sort_values(by=["Emisión", "ID"]).set_index("ID")
+new_penalties = credits.iloc[:0].copy()
+new_installments = pd.read_sql("SELECT * FROM installments WHERE 1=0", engine)  # Load an empty DataFrame structure
 
-penalties = coll.loc[coll['Tipo Cobranza'] == 'PENALTY'].sort_values(by=['Emisión', 'ID']).set_index('ID')
-new_penalties = credits.iloc[0:0].copy()
-new_installments = pd.read_sql('installments', engine, index_col='ID').iloc[0:0]
+# ✅ Importing function for handling portfolio purchases
+from app.modules.database.portfolio_manager import add_portfolio_purchase
 
+# ✅ Registering a new portfolio purchase
 add_portfolio_purchase(pd.Timestamp.now(), 3, 0.0, False, False, True, True)
+
+# ✅ Retrieving the last recorded portfolio purchase ID
 pp = pd.read_sql('portfolio_purchases', engine, index_col='ID')
 last_pp = pp.index.max()
 
+# ✅ Loading customer data from the database
 customers = pd.read_sql('customers', engine, index_col='ID')
+
+# ✅ Processing penalties, creating new credit and installment records
 for i in penalties.index:
     new_penalties.loc[i] = {
         'ID_External': None,
@@ -345,6 +389,7 @@ for i in penalties.index:
         'ID_Purch': last_pp,
         'ID_Sale': None
     }
+    
     new_installments.loc[i] = {
         'ID_Op': i,
         'Nro_Inst': 1,
@@ -353,13 +398,19 @@ for i in penalties.index:
         'Interest': -penalties.loc[i, 'IN'],
         'IVA': -penalties.loc[i, 'IV'],
         'Total': -penalties.loc[i, 'TOTAL'],
-       'ID_Owner': 1
+        'ID_Owner': 1
     }
 
+# ✅ Saving new penalty credits and installments to the database
 new_penalties.to_sql('credits', engine, index=False, if_exists='append')
 new_installments.to_sql('installments', engine, index=False, if_exists='append')
 
-cobranzas = pd.DataFrame(coll.loc[coll['Tipo Cobranza'] != 'COBRANZA X CANCEL ANT'].groupby(['Emisión', 'ID'])['TOTAL'].sum())
+# ✅ Generating a DataFrame summarizing collections
+cobranzas = pd.DataFrame(
+    coll.loc[coll['Tipo Cobranza'] != 'COBRANZA X CANCEL ANT']
+    .groupby(['Emisión', 'ID'])['TOTAL']
+    .sum()
+)
 
 for date, id in cobranzas.index:
     if 'COBRANZA X CANCEL ANT' not in coll.loc[coll['Emisión'] == date, 'Tipo Cobranza'].values:

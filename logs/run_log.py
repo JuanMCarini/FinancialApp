@@ -12,7 +12,7 @@ inputs = ['Empresa dueña de la cartera.',
           'Cambio de comisiones (X CHUBUT - ACTIVOS Y PASIVOS PROVINCIALES).', "2024/05/03", 0.06, 0.0, 0.06, 0.08, 0.095, 0.0135, 0.0145, 0.0, 0.0, 0.04, 0.0,
           'Cambio de comisiones (CHUBUT (GASTOS AMUF) - ACTIVOS Y PASIVOS PROVINCIA).', "2024/12/19", 0.06, 0.0, 0.06, 0.08, 0.095, 0.0135, 0.0145, 0.0, 0.0, 0.04, 0.08]
 
-for i in range(28):
+for i in range(29):
     inputs.append('Yes')
 
 for d in ['Cambio de comisiones (CHUBUT (GASTOS AMUF) - ACTIVOS Y PASIVOS PROVINCIA).', "2025/01/01", 0.1, 0.0, 0.06, 0.08, 0.095, 0.0135, 0.0145, 0.0, 0.0, 0.04, 0.1]:

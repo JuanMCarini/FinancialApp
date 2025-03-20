@@ -157,8 +157,6 @@ def new_credit(
     return new_cr, installments
 
 
-import pandas as pd
-
 def credits_balance(date: pd.Timestamp = pd.Timestamp.now()) -> pd.DataFrame:
     """
     Calculates the balance of credits by adjusting installment amounts based on recorded collections.
@@ -172,12 +170,12 @@ def credits_balance(date: pd.Timestamp = pd.Timestamp.now()) -> pd.DataFrame:
     Returns:
         pd.DataFrame: Updated installment balances with columns for 'Capital', 'Interest', 'IVA', and 'Total'.
     """
-
+    
     # ✅ Step 1: Ensure correct date format
     date = pd.Timestamp(date)
 
     # ✅ Step 2: Load collections and filter by date
-    df_clt = pd.read_sql(f"SELECT * FROM collection WHERE D_Emission <= {pd.Period(date, freq='D')}", engine, index_col="ID")
+    df_clt = pd.read_sql(f"SELECT * FROM collection WHERE 'D_Emission' <= {pd.Period(date, freq='D')}", engine, index_col="ID")
     
     # ✅ Step 3: Convert financial columns to float for calculations
     numeric_cols = ["Capital", "Interest", "IVA", "Total"]
@@ -185,7 +183,7 @@ def credits_balance(date: pd.Timestamp = pd.Timestamp.now()) -> pd.DataFrame:
 
     # ✅ Step 4: Load installments and filter only relevant credits
     df_its = pd.read_sql("SELECT * FROM installments", engine, index_col="ID")
-    credits = pd.read_sql(f"SELECT ID FROM credits WHERE Date_Settlement <= {pd.Period(date, freq='D')}", engine, index_col="ID")
+    credits = pd.read_sql(f"SELECT ID FROM credits WHERE 'Date_Settlement' <= {pd.Period(date, freq='D')}", engine, index_col="ID")
     df_its = df_its[df_its["ID_Op"].isin(credits.index)]
 
     # ✅ Step 5: Convert installment financial columns to float
@@ -195,48 +193,12 @@ def credits_balance(date: pd.Timestamp = pd.Timestamp.now()) -> pd.DataFrame:
     df_coll = df_clt.groupby("ID_Inst")[numeric_cols].sum()
 
     # ✅ Step 7: Adjust installments by subtracting collected amounts
-    df_its.loc[df_its.index.isin(df_coll.index), numeric_cols] -= df_coll[numeric_cols]
+    for col in numeric_cols:
+        df_its.loc[df_its.index.isin(df_coll.index), col] -= df_coll[col]
     
     # ✅ Step 8: Prevent negative values due to floating-point errors and round values
-    df_its[numeric_cols] = df_its[numeric_cols].clip(lower=0).round(2)
+    df_its[numeric_cols] = df_its[numeric_cols].round(2)
 
     # ✅ Step 9: Return the updated installment balances
     return df_its
 
-
-def credits_balance_all(date: pd.Timestamp = pd.Timestamp.now()) -> pd.DataFrame:
-    """
-    Calculates the balance of credits by adjusting the installment amounts based on the recorded collections.
-
-    This function retrieves data from the `collection` and `installments` tables, adjusts the values in 
-    installments to account for the amounts already collected, and returns the updated installment data.
-
-    Returns:
-        pd.DataFrame: A DataFrame representing the updated balances for all installments, 
-                      with columns for 'Capital', 'Interest', 'IVA', and 'Total'.
-    """
-
-    # Load the collections table and convert financial columns to float
-    df_clt = pd.read_sql('collection', engine, index_col='ID')
-    if type(date) == pd.Period:
-        date = pd.Period.to_timestamp(date)
-    
-    df_clt = df_clt[df_clt['D_Emission'] <= date]
-    df_clt[['Capital', 'Interest', 'IVA', 'Total']] = df_clt[['Capital', 'Interest', 'IVA', 'Total']].astype(float)
-    
-    # Load the installments table and convert financial columns to float
-    df_its = pd.read_sql('installments', engine, index_col='ID')
-    credits = pd.read_sql('credits', engine, index_col='ID')
-    df_its = df_its[df_its['ID_Op'].isin(credits[credits['Date_Settlement'] <= date].index)]
-    df_its[['Capital', 'Interest', 'IVA', 'Total']] = df_its[['Capital', 'Interest', 'IVA', 'Total']].astype(float)
-    
-    # Group collections by installment ID and calculate the total for each column
-    df_coll = df_clt.groupby('ID_Inst')[['Capital', 'Interest', 'IVA', 'Total']].sum()
-    
-    # Adjust the installment amounts by subtracting the collected amounts
-    for c in ['Capital', 'Interest', 'IVA', 'Total']:
-        df_its.loc[df_its.index.isin(df_coll.index), c] -= df_coll[c]
-        df_its[c] = df_its[c].round(2)
-
-    # Return the updated installments DataFrame
-    return df_its

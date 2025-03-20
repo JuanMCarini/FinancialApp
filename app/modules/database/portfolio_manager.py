@@ -47,10 +47,6 @@ def validate_supplier_and_business_plan(id_supplier: int, id_bp: int):
     print(f"✅ Supplier {id_supplier} and business plan {id_bp} are valid and correctly associated.")
 
 
-
-import os
-import pandas as pd
-
 def load_file(path: str) -> pd.DataFrame:
     """
     Loads a file into a pandas DataFrame, supporting CSV and Excel files.
