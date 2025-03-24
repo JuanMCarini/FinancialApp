@@ -267,7 +267,7 @@ def _process_early_payment(complete_balance, amount, collection, date, early: bo
 
     return collection
 
-def _process_penalty(amount, credits, date, id_credits, collection, save, early: bool = False):
+def _process_penalty(amount, credits, date, id_credits, collection, save, early: bool = False, migration: bool = False):
     """Process a penalty if there is a remaining amount."""
     cr_penalty = credits.iloc[0:0].copy()
     inst = pd.read_sql('installments', engine, index_col='ID')
@@ -320,6 +320,8 @@ def _process_penalty(amount, credits, date, id_credits, collection, save, early:
     if save:
         cr_penalty.to_sql('credits', engine, index=False, if_exists='append')
         inst.to_sql('installments', engine, index=False, if_exists='append')
+        if migration:
+            collection.to_sql('collection', engine, index=False, if_exists='append')
         
     return collection, cr_penalty, inst
 
@@ -517,6 +519,7 @@ def charging(
                 cr_penalty.to_sql('credits', engine, index=False, if_exists='append')
                 inst.to_sql('installments', engine, index=False, if_exists='append')
             collection.to_sql('collection', engine, index=False, if_exists='append')
+            print(collection)
         except (alIE, myIE) as e:
             print(f"Database Integrity Error: {e}\nID: {identifier}\nPenalty: {cr_penalty}\nInstallment: {inst}\nCollections: {collection}")
 
@@ -651,11 +654,11 @@ def collection_w_early_cancel(
             if not installments.empty:
                 installments.to_sql('installments', engine, index=False, if_exists='append')
             collection.to_sql('collection', engine, index=False, if_exists='append')
+            print(collection)
         except (alIE, myIE) as e:
             print(f"⚠️ Database Error: {e}")
 
     return collection, penalties, installments
-
 
 
 def reverse(
@@ -1111,7 +1114,7 @@ def calculate_accumulated_balance(id_supplier: int, date: pd.Timestamp) -> tuple
     balance_acum = balance_acum.query("Total != 0.0").copy()
 
     # ✅ Calculate accumulated balance
-    balance_acum['Accumulated'] = balance_acum['Total'].cumsum()
+    balance['Accumulated'] = balance['Total'].cumsum()
 
     return balance, balance_acum
 
@@ -1136,7 +1139,7 @@ def resource_collection(
 
     # ✅ Load supplier data
     companies = pd.read_sql(f"SELECT * FROM companies WHERE ID = {id_supplier}", engine, index_col="ID")
-
+    
     # ✅ Verify supplier existence
     if companies.empty:
         raise ValueError(f"❌ Supplier ID {id_supplier} does not exist in the database.")
@@ -1154,16 +1157,16 @@ def resource_collection(
 
     # ✅ Fetch accumulated balances
     balance, balance_acum = calculate_accumulated_balance(id_supplier, date)
-
+    
     # ✅ Fetch system settings and determine cutoff
     setts = pd.read_sql("SELECT ID, Value FROM settings WHERE ID = 2", engine, index_col="ID")
     tolerance_value = float(setts.loc[2, "Value"])
 
     # ✅ Filter accumulated balances based on conditions
-    filter_condition = (balance_acum["Accumulated"] <= amount) | (abs(balance_acum["Accumulated"] - amount) <= tolerance_value)
-    amount -= balance_acum.loc[filter_condition, "Total"].sum()
-    balance = balance.loc[balance['D_Due'].isin(balance_acum.loc[filter_condition].index)]
-
+    filter_condition = (balance["Accumulated"] <= amount) | (abs(balance["Accumulated"].max() - amount) <= tolerance_value)
+    balance = balance.loc[filter_condition]
+    amount -= balance["Total"].sum()
+    
     # ✅ Initialize collections DataFrame
     collections = pd.DataFrame(columns=["ID_Inst", "D_Emission", "Type_Collection", "Capital", "Interest", "IVA", "Total"])
 

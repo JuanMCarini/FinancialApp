@@ -184,6 +184,7 @@ def credits_balance(date: pd.Timestamp = pd.Timestamp.now()) -> pd.DataFrame:
     # ✅ Step 4: Load installments and filter only relevant credits
     df_its = pd.read_sql("SELECT * FROM installments", engine, index_col="ID")
     credits = pd.read_sql(f"SELECT ID FROM credits WHERE 'Date_Settlement' <= {pd.Period(date, freq='D')}", engine, index_col="ID")
+    
     df_its = df_its[df_its["ID_Op"].isin(credits.index)]
 
     # ✅ Step 5: Convert installment financial columns to float
@@ -198,6 +199,16 @@ def credits_balance(date: pd.Timestamp = pd.Timestamp.now()) -> pd.DataFrame:
     
     # ✅ Step 8: Prevent negative values due to floating-point errors and round values
     df_its[numeric_cols] = df_its[numeric_cols].round(2)
+
+    credits = pd.read_sql('credits', engine, index_col='ID')
+    bp = pd.read_sql('business_plan', engine, index_col='ID')
+    companies = pd.read_sql('companies', engine, index_col='ID')
+
+    df_its['Anchorer'] = df_its['ID_Op'].apply(lambda x: credits.loc[x, 'ID_BP'])
+    df_its['Anchorer'] = df_its['Anchorer'].apply(lambda x: bp.loc[x, 'ID_Company'])
+    df_its['Anchorer'] = df_its['Anchorer'].apply(lambda x: companies.loc[x, 'Social_Reason'])
+    df_its['Owner']    = df_its['ID_Owner'].apply(lambda x: companies.loc[x, 'Social_Reason'])
+    df_its.drop(columns=['ID_Owner'], inplace=True)
 
     # ✅ Step 9: Return the updated installment balances
     return df_its
