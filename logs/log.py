@@ -313,3 +313,136 @@ for i in range(3,6):
 
 print("✅ Credit migration completed. Now starting collections migration.")
 
+# Load collection Excel file
+print("🔄 Loading collection report from Excel...")
+coll_path = 'inputs/Reporte - Cobranzas.xlsx'
+df = pd.read_excel(coll_path)
+
+# Rename columns for consistency
+print("📑 Renaming columns...")
+df.rename(columns={'Emisión': 'D_Emission', 'Tipo Cobranza': 'Type_Collection', 'Crédito': 'ID_Op',
+                   'Cta.': 'Nro_Inst', 'CA': 'Capital', 'IN': 'Interest', 'IV': 'IVA', 'TOTAL': 'Total'}, inplace=True)
+
+# Drop unused columns
+print("🧹 Dropping unused columns...")
+df.drop(columns=['GS', 'PU'], inplace=True)
+
+# Filter out unwanted rows
+print("🔍 Filtering rows...")
+df = df.loc[df['Línea'] != 'DECRETO 14/12']
+df = df.loc[(df['Type_Collection'] != 'ANTICIPO')]
+
+# Convert CUIL to integer
+print("🔢 Converting CUIL to integer...")
+df['CUIL'] = df['CUIL'].astype(int)
+
+# Create monthly period column
+print("🗓️ Creating period column...")
+df['Per. Ems.'] = df['D_Emission'].dt.to_period('M')
+
+# Normalize 'Línea' values
+print("🧾 Normalizing 'Línea' column...")
+amuf = list(df['Línea'].unique())
+amuf.remove('PENALTY')
+df['Línea'] = df['Línea'].replace(amuf, 'Asociación Mutual Union Federal')
+
+# Map external credit ID
+print("🔗 Mapping external credit IDs...")
+df['ID_Ext'] = df['ID_Op'].apply(lambda x: inv.loc[inv['Id. Op.'] == x].index[0] if x in inv['Id. Op.'].values else None)
+
+# Process penalties
+print("⚠️ Processing penalties...")
+penalty = -df.loc[df['Línea'] == 'PENALTY'].groupby(['D_Emission', 'CUIL'])[['Total']].sum().copy()
+
+# Create new penalty records
+print("📄 Creating new penalty credit entries...")
+credits = pd.read_sql('credits', engine, index_col='ID')
+new_penalties = credits.loc[credits['TEM_W_IVA'] == 0.0].copy()
+installments = pd.read_sql('installments', engine, index_col='ID')
+new_installments = installments.iloc[0:0].copy()
+penalty = penalty.reset_index()
+customers = pd.read_sql('customers', engine, index_col='ID')
+penalty['ID_Customers'] = penalty['CUIL'].apply(lambda x: customers.loc[customers['CUIL'] == x].index[0] if x in customers['CUIL'].values else 'Error')
+penalty.set_index(['D_Emission', 'ID_Customers'], inplace=True, drop=True)
+
+# Generate new penalties DataFrame
+print("➕ Populating new penalties...")
+for i, (d, id) in enumerate(penalty.index):
+    new_penalties.loc[i] = {
+        'ID_External': None,
+        'ID_Client': id,
+        'Date_Settlement': d,
+        'ID_BP': 1,
+        'Cap_Requested': 0.0,
+        'Cap_Grant': 0.0,
+        'N_Inst': 1,
+        'First_Inst_Purch': None,
+        'TEM_W_IVA': 0.0,
+        'V_Inst': penalty.loc[(d,id), 'Total'],
+        'First_Inst_Sold': None,
+        'D_F_Due': d,
+        'ID_Purch': None,
+        'ID_Sale': None}
+
+# Save penalties to database
+print("💾 Saving penalties to 'credits' table...")
+new_penalties.to_sql('credits', engine, if_exists='append', index=False)
+
+# Reload updated credits
+print("♻️ Reloading updated credits from DB...")
+credits = pd.read_sql('credits', engine, index_col='ID')
+new_installments = installments.iloc[0:0].copy()
+new_penalties = credits.loc[credits['TEM_W_IVA'] == 0.0]
+
+# Generate new installment records for penalties
+print("📊 Creating new installments...")
+for id in new_penalties.index:
+    new_installments.loc[id] = {
+        'ID_Op': id,
+        'Nro_Inst': 1,
+        'D_Due': new_penalties.loc[id, 'Date_Settlement'],
+        'Capital': 0.0,
+        'Interest': new_penalties.loc[id, 'V_Inst'] / 1.21,
+        'IVA': new_penalties.loc[id, 'V_Inst'] / 1.21 * 0.21,
+        'Total': new_penalties.loc[id, 'V_Inst'],
+        'ID_Owner': 1
+       }
+
+# Save installments
+print("💾 Saving new installments...")
+new_installments.to_sql('installments', engine, if_exists='append', index=False)
+
+# Reload installments
+print("♻️ Reloading updated installments...")
+installments = pd.read_sql('installments', engine, index_col='ID')
+installments['ID_Ext'] = installments['ID_Op'].apply(lambda x: credits.loc[x, 'ID_External'])
+
+# Build penalty collections
+print("📥 Preparing penalty collection records...")
+inst_penalties = installments.loc[installments['ID_Op'].isin(new_penalties.index.values)].copy().reset_index()
+inst_penalties.rename(columns={'ID': 'ID_Inst', 'D_Due': 'D_Emission'}, inplace=True)
+inst_penalties['Type_Collection'] = 'PENALTY'
+inst_penalties = inst_penalties[['ID_Inst', 'D_Emission', 'Type_Collection', 'Capital', 'Interest', 'IVA', 'Total']]
+
+# Group and sum non-penalty collections
+print("📊 Summarizing standard collections...")
+coll = -df.loc[df['Línea'] != 'PENALTY'].groupby(['D_Emission', 'Línea', 'Type_Collection', 'ID_Ext', 'Nro_Inst'])[['Capital', 'Interest', 'IVA', 'Total']].sum().copy()
+coll = coll.reset_index()
+
+# Normalize Type_Collection values
+print("🔁 Normalizing collection type values...")
+coll['Type_Collection'] = coll['Type_Collection'].replace({'COBRANZA': 'CAN. ANT.', 'COBRANZA X CANCEL ANT': 'BON. CAN. ANT.'})
+
+# Map to installment IDs
+print("🔗 Mapping collections to installment IDs...")
+coll['ID_Inst'] = coll.apply(lambda row: installments.loc[(installments['ID_Ext'] == row['ID_Ext']) & (installments['Nro_Inst'] == row['Nro_Inst'])].index[0], axis=1)
+
+# Final formatting
+print("📋 Finalizing collection DataFrame...")
+coll = coll[['ID_Inst', 'D_Emission', 'Type_Collection', 'Capital', 'Interest', 'IVA', 'Total']]
+coll = pd.concat([coll, inst_penalties], ignore_index=True)
+
+# Save all collection data
+print("💾 Saving full collection data...")
+coll.to_sql('collection', engine, if_exists='append', index=False)
+print("✅ Collection process completed.")
